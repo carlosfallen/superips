@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Status do Servidor</title>
+  <style>
+    /* Fontes e reset básico */
+    @import url('https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@300;400;500;600&display=swap');
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
+      line-height: 1.5;
+      color: #1d1d1f;
+      background-color: #f5f5f7;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+    
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+    
+    /* Cabeçalho */
+    header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    
+    h1 {
+      font-size: 36px;
+      font-weight: 500;
+      letter-spacing: -0.5px;
+      margin-bottom: 8px;
+    }
+    
+    .subtitle {
+      font-size: 16px;
+      font-weight: 400;
+      color: #86868b;
+    }
+    
+    /* Cards e estatísticas */
+    .section-title {
+      font-size: 24px;
+      letter-spacing: -0.3px;
+    }
+    
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-bottom: 40px;
+    }
+    
+    .stat-card {
+      background-color: white;
+      border-radius: 12px;
+      padding: 24px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    
+    .stat-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+    }
+    
+    .stat-label {
+      font-size: 14px;
+      color: #86868b;
+      margin-bottom: 8px;
+      font-weight: 500;
+    }
+    
+    .stat-value {
+      font-size: 28px;
+      font-weight: 500;
+      letter-spacing: -0.5px;
+    }
+    
+    /* Tabela de solicitações */
+    .data-table {
+      background-color: white;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+      margin-bottom: 30px;
+    }
+    
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    
+    th {
+      text-align: left;
+      padding: 16px 20px;
+      font-weight: 500;
+      font-size: 14px;
+      color: #86868b;
+      border-bottom: 1px solid #f2f2f2;
+      background-color: #fcfcfc;
+    }
+    
+    td {
+      padding: 16px 20px;
+      border-bottom: 1px solid #f2f2f2;
+      font-size: 14px;
+    }
+    
+    tr:last-child td {
+      border-bottom: none;
+    }
+    
+    tr:hover td {
+      background-color: #f9f9fb;
+    }
+    
+    /* Status indicators */
+    .online {
+      color: #34c759;
+      font-weight: 500;
+    }
+    
+    .offline {
+      color: #ff3b30;
+      font-weight: 500;
+    }
+    
+    /* Botão de atualização */
+    .refresh-button {
+      padding: 12px 24px;
+      background-color: #0071e3;
+      color: white;
+      border: none;
+      border-radius: 980px;
+      font-size: 16px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    
+    .refresh-button:hover {
+      background-color: #0077ed;
+      transform: scale(1.02);
+    }
+    
+    .refresh-button:active {
+      transform: scale(0.98);
+    }
+    
+    /* Novos estilos para o histórico */
+    .ping-status {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    
+    .status-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    
+    .online-dot { background-color: #34c759; }
+    .offline-dot { background-color: #ff3b30; }
+    
+    .history-table {
+      margin-top: 30px;
+      background-color: white;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+    }
+
+    /* Responsividade */
+    @media (max-width: 768px) {
+      .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      
+      h1 {
+        font-size: 28px;
+      }
+      
+      .section-title {
+        font-size: 22px;
+      }
+    }
+    
+    @media (max-width: 576px) {
+      .stats-grid {
+        grid-template-columns: 1fr;
+      }
+      
+      .stat-card {
+        padding: 20px;
+      }
+      
+      th, td {
+        padding: 12px 16px;
+      }
+      
+      /* Ocultar algumas colunas em telas pequenas */
+      .hide-mobile {
+        display: none;
+      }
+    }
+
+    /* Loader */
+    .loader {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #0071e3;
+      border-radius: 50%;
+      width: 30px;
+      height: 30px;
+      animation: spin 1s linear infinite;
+      margin: 20px auto;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Status do Servidor</h1>
+    </header>
+    
+    <h2 class="section-title">Visão Geral do Sistema</h2>
+    <div class="stats-grid" id="stats-container">
+      <div class="stat-card">
+        <div class="stat-label">Tempo Ativo</div>
+        <div class="stat-value" id="uptime">Carregando...</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Requisições</div>
+        <div class="stat-value" id="request-count">Carregando...</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Dispositivos Online</div>
+        <div class="stat-value" id="devices-count">Carregando...</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Impressoras</div>
+        <div class="stat-value" id="printers-count">Carregando...</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Roteadores</div>
+        <div class="stat-value" id="routers-count">Carregando...</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Caixas</div>
+        <div class="stat-value" id="boxes-count">Carregando...</div>
+      </div>
+    </div>
+
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+      <h2 class="section-title">Atividade Recente</h2>
+      <button class="refresh-button" id="refresh-button">Atualizar</button>
+    </div>
+
+    <div class="data-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Horário</th>
+            <th>Método</th>
+            <th>Rota</th>
+            <th class="hide-mobile">IP</th>
+          </tr>
+        </thead>
+        <tbody id="requests-table-body">
+          <tr>
+            <td colspan="4" style="text-align: center;">Carregando...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 class="section-title">Histórico de Ping</h2>
+    <div class="history-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Dispositivo</th>
+            <th>IP</th>
+            <th>Status</th>
+            <th>Latência</th>
+            <th>Perda</th>
+            <th>Data/Hora</th>
+          </tr>
+        </thead>
+        <tbody id="ping-history-table-body">
+          <tr>
+            <td colspan="6" style="text-align: center;">Carregando...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    // Conectar ao Socket.io
+    const socket = io();
+    
+    // Função para carregar dados do servidor
+    async function loadServerData() {
+      try {
+        const response = await fetch('/api/server-status');
+        const data = await response.json();
+        
+        // Atualizar estatísticas
+        document.getElementById('uptime').textContent = data.uptimeString;
+        document.getElementById('request-count').textContent = data.requestCount;
+        document.getElementById('devices-count').textContent = `${data.onlineDevicesCount}/${data.devicesCount}`;
+        document.getElementById('printers-count').textContent = data.printersCount;
+        document.getElementById('routers-count').textContent = data.routersCount;
+        document.getElementById('boxes-count').textContent = data.boxesCount;
+        
+        // Atualizar tabela de requisições
+        const requestsTableBody = document.getElementById('requests-table-body');
+        requestsTableBody.innerHTML = '';
+        
+        data.lastRequests.forEach(req => {
+          const row = document.createElement('tr');
+          row.innerHTML = `
+            <td>${new Date(req.time).toLocaleString('pt-BR')}</td>
+            <td>${req.method}</td>
+            <td>${req.path}</td>
+            <td class="hide-mobile">${req.ip}</td>
+          `;
+          requestsTableBody.appendChild(row);
+        });
+        
+        // Atualizar histórico de ping
+        const pingHistoryTableBody = document.getElementById('ping-history-table-body');
+        pingHistoryTableBody.innerHTML = '';
+        
+        data.pingHistory.forEach(entry => {
+          const row = document.createElement('tr');
+          row.innerHTML = `
+            <td>${entry.name || 'N/A'}</td>
+            <td>${entry.ip}</td>
+            <td>
+              <div class="ping-status">
+                <span class="status-dot ${entry.status ? 'online-dot' : 'offline-dot'}"></span>
+                ${entry.status ? 'Online' : 'Offline'}
+              </div>
+            </td>
+            <td>${entry.response_time > 0 ? entry.response_time.toFixed(2) + 'ms' : 'N/A'}</td>
+            <td>${entry.packet_loss.toFixed(1)}%</td>
+            <td>${new Date(entry.timestamp).toLocaleString('pt-BR')}</td>
+          `;
+          pingHistoryTableBody.appendChild(row);
+        });
+      } catch (error) {
+        console.error('Erro ao carregar dados do servidor:', error);
+        alert('Erro ao carregar dados do servidor. Verifique o console para mais detalhes.');
+      }
+    }
+    
+    // Carregar dados ao iniciar a página
+    document.addEventListener('DOMContentLoaded', () => {
+      loadServerData();
+      console.log('Página de status carregada');
+    });
+    
+    // Botão de atualizar
+    document.getElementById('refresh-button').addEventListener('click', () => {
+      loadServerData();
+    });
+    
+    // Atualização em tempo real via Socket.io
+    socket.on('statusUpdate', (data) => {
+      const pingHistoryTableBody = document.getElementById('ping-history-table-body');
+      const row = document.createElement('tr');
+      
+      row.innerHTML = `
+        <td>${data.deviceName || 'N/A'}</td>
+        <td>${data.ip}</td>
+        <td>
+          <div class="ping-status">
+            <span class="status-dot ${data.status ? 'online-dot' : 'offline-dot'}"></span>
+            ${data.status ? 'Online' : 'Offline'}
+          </div>
+        </td>
+        <td>${data.responseTime > 0 ? data.responseTime.toFixed(2) + 'ms' : 'N/A'}</td>
+        <td>${data.packetLoss.toFixed(1)}%</td>
+        <td>${new Date().toLocaleString('pt-BR')}</td>
+      `;
+      
+      pingHistoryTableBody.insertBefore(row, pingHistoryTableBody.firstChild);
+      
+      if (pingHistoryTableBody.children.length > 15) {
+        pingHistoryTableBody.removeChild(pingHistoryTableBody.lastChild);
+      }
+    });
+  </script>
+</body>
+</html>
