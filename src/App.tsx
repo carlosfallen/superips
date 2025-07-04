@@ -7,9 +7,12 @@ import Devices from './pages/Devices';
 import Routers from './pages/Routers';
 import Printers from './pages/Printers';
 import Boxes from './pages/Boxes';
+import Tasks from './pages/Tasks';
+import Settings from './pages/Settings';
 import Print from './pages/sheet';
 import { ThemeProvider } from './contexts/theme';
-import { InstallPWA } from './components/InstallPWA'
+import { InstallPWA } from './components/InstallPWA';
+import { Toaster } from './components/ui/toaster';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const user = useAuthStore((state) => state.user);
@@ -28,7 +31,8 @@ function App() {
             path="/"
             element={
               <ProtectedRoute>
-                <Layout /><InstallPWA />
+                <Layout />
+                <InstallPWA />
               </ProtectedRoute>
             }
           >
@@ -36,9 +40,12 @@ function App() {
             <Route path="routers" element={<Routers />} />
             <Route path="printers" element={<Printers />} />
             <Route path="boxes" element={<Boxes />} />
+            <Route path="tasks" element={<Tasks />} />
+            <Route path="settings" element={<Settings />} />
             <Route path="sheet" element={<Print />} />
           </Route>
         </Routes>
+        <Toaster />
       </Router>
     </ThemeProvider>
   );

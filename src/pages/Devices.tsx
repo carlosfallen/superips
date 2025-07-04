@@ -177,9 +177,19 @@ export default function Devices() {
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filteredDevices, setFilteredDevices] = useState<Device[]>([]);
-  const [sortConfig, setSortConfig] = useState<{ key: keyof Device; direction: 'asc' | 'desc' } | null>(null);
-  const [showDevices4, setShowDevices4] = useState(false);
+  // já começamos ordenando por IP ascendente
+const [sortConfig, setSortConfig] = useState<{ key: keyof Device; direction: 'asc' | 'desc' }>({
+  key: 'ip',
+  direction: 'asc'
+});
+
+  const [currentNetwork, setCurrentNetwork] = useState<'10.0' | '10.2' | '10.4'>('10.0');
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
+
+  // Filtrar dispositivos por faixa de rede
+  const getDevicesByNetwork = (network: '10.0' | '10.2' | '10.4'): Device[] => {
+    return devices.filter(device => device.ip.startsWith(network));
+  };
 
   useEffect(() => {
     const fetchDevices = async () => {
@@ -188,8 +198,8 @@ export default function Devices() {
           throw new Error('Authentication token is missing');
         }
         
-        const endpoint = showDevices4 ? 'vlan' : 'devices';
-        const response = await fetch(`${import.meta.env.VITE_SERVER}:${import.meta.env.VITE_PORT}/api/${endpoint}`, {
+        // Sempre buscar da API devices padrão
+        const response = await fetch(`${import.meta.env.VITE_SERVER}:${import.meta.env.VITE_PORT}/api/devices`, {
           headers: {
             'Authorization': `Bearer ${user.token}`,
             'Content-Type': 'application/json'
@@ -216,38 +226,59 @@ export default function Devices() {
 
     fetchDevices();
 
-    const eventName = showDevices4 ? 'device4StatusUpdate' : 'deviceStatusUpdate';
-    socket.on(eventName, ({ id, status }) => {
+    // Ouvir eventos de status para todas as redes
+    socket.on('deviceStatusUpdate', ({ id, status }) => {
       updateDeviceStatus(id, status);
     });
 
     return () => {
-      socket.off(eventName);
+      socket.off('deviceStatusUpdate');
     };
-  }, [setDevices, updateDeviceStatus, user, showDevices4]);
+  }, [setDevices, updateDeviceStatus, user]);
 
-  useEffect(() => {
-    const filtered = devices.filter(device => 
-      Object.values(device).some(value => 
-        String(value).toLowerCase().includes(searchTerm.toLowerCase())
-    ));
-    setFilteredDevices(filtered);
-  }, [devices, searchTerm]);
+useEffect(() => {
+  // 1. Pega só a rede atual
+  let list = getDevicesByNetwork(currentNetwork);
 
-  const handleSort = (key: keyof Device) => {
-    let direction: 'asc' | 'desc' = 'asc';
-    if (sortConfig?.key === key && sortConfig.direction === 'asc') {
-      direction = 'desc';
-    }
-    setSortConfig({ key, direction });
-    
-    const sorted = [...filteredDevices].sort((a, b) => {
+  // 2. Filtra pelo termo de busca
+  list = list.filter(device =>
+    Object.values(device).some(value =>
+      String(value).toLowerCase().includes(searchTerm.toLowerCase())
+    )
+  );
+
+  // 3. Se houver sortConfig, aplica ordenação
+  if (sortConfig) {
+    const { key, direction } = sortConfig;
+
+    // nossa função de converter IP pra número
+    const ipToNumber = (ip: string) =>
+      ip.split('.').map(Number).reduce((acc, oct) => (acc << 8) + oct, 0);
+
+    list.sort((a, b) => {
+      // ordena IP numericamente
+      if (key === 'ip') {
+        const diff = ipToNumber(a.ip) - ipToNumber(b.ip);
+        return direction === 'asc' ? diff : -diff;
+      }
+      // outros campos
       if (a[key] < b[key]) return direction === 'asc' ? -1 : 1;
       if (a[key] > b[key]) return direction === 'asc' ? 1 : -1;
       return 0;
     });
-    setFilteredDevices(sorted);
-  };
+  }
+
+  setFilteredDevices(list);
+}, [devices, searchTerm, currentNetwork, sortConfig]);
+
+const handleSort = (key: keyof Device) => {
+  let direction: 'asc' | 'desc' = 'asc';
+  if (sortConfig?.key === key && sortConfig.direction === 'asc') {
+    direction = 'desc';
+  }
+  setSortConfig({ key, direction });
+};
+
 
   const handleSaveDevice = async (updatedDevice: Device) => {
     try {
@@ -255,8 +286,7 @@ export default function Devices() {
         throw new Error('Authentication token is missing');
       }
       
-      const endpoint = showDevices4 ? 'vlan' : 'devices';
-      const response = await fetch(`${import.meta.env.VITE_SERVER}:${import.meta.env.VITE_PORT}/api/${endpoint}/${updatedDevice.id}`, {
+      const response = await fetch(`${import.meta.env.VITE_SERVER}:${import.meta.env.VITE_PORT}/api/devices/${updatedDevice.id}`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${user.token}`,
@@ -276,6 +306,19 @@ export default function Devices() {
     } catch (error) {
       console.error('Error updating device:', error);
       throw error;
+    }
+  };
+
+  const switchNetwork = (direction: 'next' | 'prev') => {
+    const networks: ('10.0' | '10.2' | '10.4')[] = ['10.0', '10.2', '10.4'];
+    const currentIndex = networks.indexOf(currentNetwork);
+    
+    if (direction === 'next') {
+      const nextIndex = (currentIndex + 1) % networks.length;
+      setCurrentNetwork(networks[nextIndex]);
+    } else {
+      const prevIndex = (currentIndex - 1 + networks.length) % networks.length;
+      setCurrentNetwork(networks[prevIndex]);
     }
   };
 
@@ -439,7 +482,7 @@ export default function Devices() {
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100">
-          {showDevices4 ? 'Faixa de rede 10.4.11' : 'Faixa de rede 10.0.11'}
+          Faixa de rede {currentNetwork}.11
         </h1>
         
         <div className="flex items-center space-x-4">
@@ -454,23 +497,30 @@ export default function Devices() {
             <Search className="absolute left-3 top-2.5 h-5 w-5 text-gray-400 dark:text-gray-500" />
           </div>
           
-          <button 
-            onClick={() => setShowDevices4(!showDevices4)}
-            className="p-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 rounded-2xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-2"
-          >
-            {showDevices4 ? (
-              <>
-                <span className="hidden md:inline">10.0</span>
-                <ArrowLeft className="w-5 h-5" />
-              </>
-            ) : (
-              <>
-                <span className="hidden md:inline">10.4</span>
-                <ArrowRight className="w-5 h-5" />
-              </>
-            )}
-          </button>
+          <div className="flex items-center space-x-2">
+            <button 
+              onClick={() => switchNetwork('prev')}
+              className="p-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 rounded-2xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+            
+            <span className="text-sm text-gray-600 dark:text-gray-400 px-2">
+              {currentNetwork === '10.0' ? '1/3' : currentNetwork === '10.2' ? '2/3' : '3/3'}
+            </span>
+            
+            <button 
+              onClick={() => switchNetwork('next')}
+              className="p-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 rounded-2xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            >
+              <ArrowRight className="w-5 h-5" />
+            </button>
+          </div>
         </div>
+      </div>
+
+      <div className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+        Mostrando {filteredDevices.length} dispositivos da rede {currentNetwork}.11
       </div>
 
       <DesktopView />

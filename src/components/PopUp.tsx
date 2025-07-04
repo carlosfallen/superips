@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef  } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Bell,
   User,
@@ -8,14 +8,21 @@ import {
   UserCircle,
   Info,
   AlertCircle,
-  Server
+  Server,
+  CheckCircle,
+  Clock,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
 import { useAuthStore } from '../store/auth';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { useToast } from '../hooks/use-toast';
 
 // URL base da API
-const API_BASE_URL = 'http://10.0.11.150:5173'; // Ajuste conforme sua configuração
+const API_BASE_URL = `${import.meta.env.VITE_SERVER}:${import.meta.env.VITE_PORT}`;
 
 // Tipos para as notificações
 type Notification = {
@@ -26,6 +33,8 @@ type Notification = {
   timestamp: string;
   type: 'info' | 'warning' | 'error' | 'success';
   relatedId?: string;
+  deviceName?: string;
+  deviceType?: string;
 };
 
 // Tipo para o usuário
@@ -41,6 +50,21 @@ type UserProfile = {
 
 // Tipo para os dropdowns ativos
 type ActiveDropdown = 'notifications' | 'profile' | null;
+
+// Função para formatar timestamp
+const formatTimestamp = (date: Date) => {
+  const now = new Date();
+  const diff = now.getTime() - date.getTime();
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+
+  if (minutes < 1) return 'Agora';
+  if (minutes < 60) return `${minutes}m atrás`;
+  if (hours < 24) return `${hours}h atrás`;
+  if (days < 7) return `${days}d atrás`;
+  return date.toLocaleDateString('pt-BR');
+};
 
 // Componente de Menu do Usuário
 const UserProfileMenu = ({ 
@@ -76,10 +100,9 @@ const UserProfileMenu = ({
       return {
         id: payload.id,
         username: payload.username,
-        // Adicione mais campos se o seu token JWT incluir outros dados
-        name: payload.username, // Usando username como nome por padrão
-        email: `${payload.username}@grupojorgebatista.com.br`, // Email derivado do username
-        role: 'Usuário', // Valor padrão
+        name: payload.username,
+        email: `${payload.username}@grupojorgebatista.com.br`,
+        role: 'Técnico de TI',
       };
     } catch (error) {
       console.error('Erro ao decodificar token:', error);
@@ -92,7 +115,6 @@ const UserProfileMenu = ({
     const fetchUserData = async () => {
       setLoading(true);
       try {
-        // Recuperar o token do localStorage
         const token = localStorage.getItem('authToken');
         
         if (!token) {
@@ -100,13 +122,9 @@ const UserProfileMenu = ({
           return;
         }
         
-        // Obter informações básicas do usuário a partir do token
         const tokenInfo = getUserInfoFromToken();
         
         if (tokenInfo) {
-          // No seu backend atual, não há endpoint específico para perfil do usuário
-          // Então vamos usar as informações do token e adicionar alguns dados extras
-          
           const userData: UserProfile = {
             ...tokenInfo,
             avatar: null,
@@ -126,9 +144,7 @@ const UserProfileMenu = ({
     fetchUserData();
   }, []);
 
-  // Formatar o nome do usuário para exibição
   const formatDisplayName = (username: string) => {
-    // Converter para título (primeira letra de cada palavra maiúscula)
     return username
       .split('.')
       .map(word => word.charAt(0).toUpperCase() + word.slice(1))
@@ -137,9 +153,11 @@ const UserProfileMenu = ({
 
   return (
     <div className="relative">
-      <button
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={onToggle}
-        className="p-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center"
+        className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-200"
       >
         {user.avatar ? (
           <img
@@ -150,13 +168,15 @@ const UserProfileMenu = ({
         ) : (
           <User className="h-5 w-5" />
         )}
-      </button>
+      </Button>
 
       {isOpen && (
-        <div className="rounded-2xl absolute right-0 mt-2 w-64 bg-white dark:bg-gray-800 shadow-lg py-2 border border-gray-200 dark:border-gray-700 z-50">
-          <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+        <div className="absolute right-0 mt-2 w-72 bg-white/95 dark:bg-gray-800/95 backdrop-blur-xl rounded-2xl shadow-xl border border-gray-200/50 dark:border-gray-700/50 z-50 overflow-hidden">
+          <div className="p-4 border-b border-gray-200 dark:border-gray-700">
             <div className="flex items-center">
-              <UserCircle className="h-10 w-10 text-gray-400" />
+              <div className="w-12 h-12 bg-gradient-to-r from-indigo-600 to-purple-600 rounded-xl flex items-center justify-center">
+                <UserCircle className="h-8 w-8 text-white" />
+              </div>
               <div className="ml-3">
                 <p className="text-sm font-medium text-gray-900 dark:text-white">
                   {loading ? 'Carregando...' : formatDisplayName(user.username)}
@@ -164,47 +184,43 @@ const UserProfileMenu = ({
                 <p className="text-xs text-gray-500 dark:text-gray-400">
                   {loading ? 'Carregando...' : user.email}
                 </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
+                <Badge variant="secondary" className="mt-1 text-xs">
                   {loading ? '' : user.role}
-                </p>
+                </Badge>
               </div>
             </div>
           </div>
           
-          <Link
-            to="/profile"
-            className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-            onClick={() => onToggle()}
-          >
-            <div className="flex items-center">
+          <div className="p-2">
+            <Link
+              to="/settings"
+              className="flex items-center w-full px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors"
+              onClick={() => onToggle()}
+            >
               <Settings className="h-4 w-4 mr-3" />
               Configurações
-            </div>
-          </Link>
-          
-          <Link
-            to="/help"
-            className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-            onClick={() => onToggle()}
-          >
-            <div className="flex items-center">
+            </Link>
+            
+            <Link
+              to="/help"
+              className="flex items-center w-full px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors"
+              onClick={() => onToggle()}
+            >
               <HelpCircle className="h-4 w-4 mr-3" />
               Ajuda
-            </div>
-          </Link>
-          
-          <button
-            onClick={() => {
-              logout();
-              onToggle();
-            }}
-            className="block w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-          >
-            <div className="flex items-center">
+            </Link>
+            
+            <button
+              onClick={() => {
+                logout();
+                onToggle();
+              }}
+              className="flex items-center w-full px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-colors"
+            >
               <LogOut className="h-4 w-4 mr-3" />
               Sair
-            </div>
-          </button>
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -220,6 +236,7 @@ const NotificationsPopover = ({
   onToggle: () => void;
 }) => {
   const { user } = useAuthStore();
+  const { toast } = useToast();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   
@@ -240,14 +257,17 @@ const NotificationsPopover = ({
       const prevDevice = prevDeviceDataRef.current.find(d => d.id === device.id);
       
       if (prevDevice && prevDevice.status !== device.status) {
+        const isOnline = device.status === 1;
         newNotifications.push({
           id: `device-${device.id}-${now.getTime()}`,
-          title: device.status === 0 ? 'Dispositivo Offline' : 'Dispositivo Online',
-          message: `${device.name} (${device.ip}) está ${device.status === 0 ? 'offline' : 'online'}.`,
+          title: isOnline ? 'Dispositivo Online' : 'Dispositivo Offline',
+          message: `${device.name} (${device.ip}) está ${isOnline ? 'online' : 'offline'}.`,
           read: false,
           timestamp: formatTimestamp(now),
-          type: device.status === 0 ? 'error' : 'success',
-          relatedId: device.id.toString()
+          type: isOnline ? 'success' : 'error',
+          relatedId: device.id.toString(),
+          deviceName: device.name,
+          deviceType: device.type
         });
       }
     });
@@ -257,14 +277,17 @@ const NotificationsPopover = ({
       const prevPrinter = prevPrinterDataRef.current.find(p => p.id === printer.id);
       
       if (prevPrinter && prevPrinter.online !== printer.online) {
+        const isOnline = printer.online === 1;
         newNotifications.push({
           id: `printer-${printer.id}-${now.getTime()}`,
-          title: printer.online === 0 ? 'Impressora Offline' : 'Impressora Online',
-          message: `A impressora ${printer.model} (${printer.ip}) está ${printer.online === 0 ? 'offline' : 'online'}.`,
+          title: isOnline ? 'Impressora Online' : 'Impressora Offline',
+          message: `A impressora ${printer.model} (${printer.ip}) está ${isOnline ? 'online' : 'offline'}.`,
           read: false,
           timestamp: formatTimestamp(now),
-          type: printer.online === 0 ? 'warning' : 'success',
-          relatedId: printer.id.toString()
+          type: isOnline ? 'success' : 'warning',
+          relatedId: printer.id.toString(),
+          deviceName: printer.model,
+          deviceType: 'Impressora'
         });
       }
     });
@@ -297,8 +320,20 @@ const NotificationsPopover = ({
           currentPrinters
         );
 
-        // Atualizar notificações mantendo as anteriores
-        setNotifications(prev => [...statusNotifications, ...prev]);
+        if (statusNotifications.length > 0) {
+          setNotifications(prev => [...statusNotifications, ...prev.slice(0, 20)]);
+          
+          // Mostrar toast para notificações importantes
+          statusNotifications.forEach(notification => {
+            if (notification.type === 'error') {
+              toast({
+                title: notification.title,
+                description: notification.message,
+                variant: "destructive"
+              });
+            }
+          });
+        }
 
         // Atualizar referências para dados anteriores
         prevDeviceDataRef.current = currentDevices;
@@ -317,27 +352,20 @@ const NotificationsPopover = ({
     // Configurar polling a cada 30 segundos
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
-  }, [user]);
+  }, [user, toast]);
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
   const markAsRead = (id: string) => {
-    // Na implementação real, você adicionaria um endpoint para marcar notificações como lidas
-    // Por enquanto, vamos apenas atualizar o estado local
     setNotifications(notifications.map(notif =>
       notif.id === id ? { ...notif, read: true } : notif
     ));
-    
-    // Se o ID estiver relacionado a um dispositivo ou impressora, você poderia
-    // navegar para a página correspondente aqui
   };
   
   const markAllAsRead = () => {
-    // Na implementação real, chamar o endpoint para marcar todas as notificações como lidas
     setNotifications(notifications.map(notif => ({ ...notif, read: true })));
   };
   
-  // Função para renderizar o ícone correto baseado no tipo de notificação
   const getNotificationIcon = (type: string) => {
     switch(type) {
       case 'info':
@@ -345,9 +373,9 @@ const NotificationsPopover = ({
       case 'warning':
         return <AlertCircle className="h-4 w-4 text-yellow-500" />;
       case 'error':
-        return <AlertCircle className="h-4 w-4 text-red-500" />;
+        return <WifiOff className="h-4 w-4 text-red-500" />;
       case 'success':
-        return <Server className="h-4 w-4 text-green-500" />;
+        return <Wifi className="h-4 w-4 text-green-500" />;
       default:
         return <Bell className="h-4 w-4 text-gray-500" />;
     }
@@ -355,74 +383,104 @@ const NotificationsPopover = ({
 
   return (
     <div className="relative">
-      <button
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={onToggle}
-        className="p-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 relative"
+        className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-200 relative"
       >
         <Bell className="h-5 w-5" />
         {unreadCount > 0 && (
-          <span className="absolute top-1 right-1 h-5 w-5 bg-red-500 rounded-full flex items-center justify-center text-xs text-white">{unreadCount}</span>
+          <Badge 
+            variant="destructive" 
+            className="absolute -top-1 -right-1 h-5 w-5 flex items-center justify-center text-xs p-0 animate-pulse"
+          >
+            {unreadCount > 9 ? '9+' : unreadCount}
+          </Badge>
         )}
-      </button>
+      </Button>
 
       {isOpen && (
-        <div className="rounded-2xl absolute right-0 mt-2 w-60 bg-white dark:bg-gray-800 shadow-lg overflow-hidden border border-gray-200 dark:border-gray-700 z-50">
+        <div className="absolute right-0 mt-2 w-80 bg-white/95 dark:bg-gray-800/95 backdrop-blur-xl rounded-2xl shadow-xl border border-gray-200/50 dark:border-gray-700/50 z-50 overflow-hidden">
           <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-            <h3 className="text-lg font-medium text-gray-900 dark:text-white">Notificações</h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                Notificações
+              </h3>
+              {unreadCount > 0 && (
+                <Badge variant="secondary">
+                  {unreadCount} nova{unreadCount !== 1 ? 's' : ''}
+                </Badge>
+              )}
+            </div>
           </div>
           
           <div className="max-h-96 overflow-y-auto">
             {loading ? (
               <div className="p-4 text-center text-gray-500 dark:text-gray-400">
-                Carregando notificações...
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600 mx-auto"></div>
+                <p className="mt-2">Carregando notificações...</p>
               </div>
             ) : notifications.length > 0 ? (
               notifications.map((notification) => (
                 <div
                   key={notification.id}
-                  className={`p-4 border-b border-gray-200 dark:border-gray-700 ${
+                  className={`p-4 border-b border-gray-200 dark:border-gray-700 last:border-b-0 ${
                     !notification.read ? 'bg-indigo-50 dark:bg-indigo-900/20' : ''
                   } cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors`}
                   onClick={() => markAsRead(notification.id)}
                 >
-                  <div className="flex justify-between items-start">
-                    <div className="flex">
-                      <div className="mt-1 mr-3">
-                        {getNotificationIcon(notification.type)}
-                      </div>
-                      <div>
-                        <h4 className="text-sm font-medium text-gray-900 dark:text-white flex items-center">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-1">
+                      {getNotificationIcon(notification.type)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-sm font-medium text-gray-900 dark:text-white">
                           {notification.title}
                         </h4>
-                        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                          {notification.message}
-                        </p>
-                        <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                        {!notification.read && (
+                          <div className="w-2 h-2 bg-indigo-500 rounded-full"></div>
+                        )}
+                      </div>
+                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                        {notification.message}
+                      </p>
+                      <div className="flex items-center justify-between mt-2">
+                        <p className="text-xs text-gray-400 dark:text-gray-500">
                           {notification.timestamp}
                         </p>
+                        {notification.deviceType && (
+                          <Badge variant="outline" className="text-xs">
+                            {notification.deviceType}
+                          </Badge>
+                        )}
                       </div>
                     </div>
-                    {!notification.read && (
-                      <span className="h-2 w-2 bg-indigo-500 rounded-full mt-2"></span>
-                    )}
                   </div>
                 </div>
               ))
             ) : (
-              <div className="p-4 text-center text-gray-500 dark:text-gray-400">
-                Nenhuma notificação
+              <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+                <Bell className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                <h3 className="text-lg font-medium mb-2">Nenhuma notificação</h3>
+                <p className="text-sm">
+                  Você será notificado sobre mudanças no status dos dispositivos
+                </p>
               </div>
             )}
           </div>
           
           {notifications.length > 0 && unreadCount > 0 && (
             <div className="p-4 border-t border-gray-200 dark:border-gray-700">
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={markAllAsRead}
-                className="text-sm text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300"
+                className="w-full text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300"
               >
                 Marcar todas como lidas
-              </button>
+              </Button>
             </div>
           )}
         </div>
@@ -442,7 +500,6 @@ const HeaderDropdowns = ({ logout }: { logout: () => void }) => {
   // Fechar dropdowns quando clicar fora
   React.useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      // Verificar se o clique foi fora dos dropdowns
       const target = event.target as HTMLElement;
       if (!target.closest('.dropdown-container')) {
         setActiveDropdown(null);
@@ -454,7 +511,7 @@ const HeaderDropdowns = ({ logout }: { logout: () => void }) => {
   }, []);
 
   return (
-    <div className="flex items-center space-x-4 dropdown-container" onClick={(e) => e.stopPropagation()}>
+    <div className="flex items-center space-x-2 dropdown-container" onClick={(e) => e.stopPropagation()}>
       <NotificationsPopover 
         isOpen={activeDropdown === 'notifications'}
         onToggle={() => handleToggle('notifications')}
@@ -468,108 +525,8 @@ const HeaderDropdowns = ({ logout }: { logout: () => void }) => {
   );
 };
 
-// Componente de cabeçalho completo
-const Header = () => {
-  // Função para realizar logout
-  const handleLogout = () => {
-    localStorage.removeItem('authToken');
-    // Redirecionar para página de login
-    window.location.href = '/login';
-  };
-  
-  return (
-    <header className="bg-white dark:bg-gray-800 shadow-sm border-b border-gray-200 dark:border-gray-700">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between h-16 items-center">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <h1 className="text-xl font-semibold text-gray-900 dark:text-white">TI Monitor</h1>
-            </div>
-            <nav className="ml-6 flex space-x-4">
-              <Link to="/dashboard" className="px-3 py-2 rounded-md text-sm font-medium text-gray-900 dark:text-white">
-                Dashboard
-              </Link>
-              <Link to="/devices" className="px-3 py-2 rounded-md text-sm font-medium text-gray-500 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">
-                Dispositivos
-              </Link>
-              <Link to="/printers" className="px-3 py-2 rounded-md text-sm font-medium text-gray-500 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">
-                Impressoras
-              </Link>
-              <Link to="/network" className="px-3 py-2 rounded-md text-sm font-medium text-gray-500 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">
-                Rede
-              </Link>
-            </nav>
-          </div>
-          
-          <HeaderDropdowns logout={handleLogout} />
-        </div>
-      </div>
-    </header>
-  );
-};
-
-// AuthProvider para gerenciar estado de autenticação (opcional)
-const AuthProvider = ({ children }: { children: React.ReactNode }) => {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  
-  useEffect(() => {
-    // Verificar se o usuário está autenticado
-    const token = localStorage.getItem('authToken');
-    setIsAuthenticated(!!token);
-    setIsLoading(false);
-  }, []);
-  
-  const login = async (username: string, password: string) => {
-    try {
-      const response = await axios.post(`${API_BASE_URL}/api/auth/login`, {
-        username,
-        password
-      });
-      
-      localStorage.setItem('authToken', response.data.token);
-      setIsAuthenticated(true);
-      return true;
-    } catch (error) {
-      console.error('Erro de login:', error);
-      return false;
-    }
-  };
-  
-  const logout = () => {
-    localStorage.removeItem('authToken');
-    setIsAuthenticated(false);
-    window.location.href = '/login';
-  };
-  
-  return (
-    <AuthContext.Provider value={{ isAuthenticated, isLoading, login, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
-};
-
-// Contexto de autenticação
-const AuthContext = React.createContext<{
-  isAuthenticated: boolean;
-  isLoading: boolean;
-  login: (username: string, password: string) => Promise<boolean>;
-  logout: () => void;
-}>({
-  isAuthenticated: false,
-  isLoading: true,
-  login: async () => false,
-  logout: () => {}
-});
-
-// Hook para usar o contexto de autenticação
-const useAuth = () => React.useContext(AuthContext);
-
 export { 
   HeaderDropdowns, 
-  Header, 
   NotificationsPopover, 
-  UserProfileMenu,
-  AuthProvider,
-  useAuth
+  UserProfileMenu
 };
