@@ -5,6 +5,17 @@
   "private": true,
   "version": "7.2.0",
   "type": "module",
+<<<<<<< HEAD
+=======
+<<<<<<< HEAD
+"scripts": {
+  "dev": "vite",
+  "build": "vite build",
+  "preview": "vite preview",
+  "lint": "eslint ."
+},
+=======
+>>>>>>> bdf09fb1 (update visual)
   "scripts": {
     "start": "node server/index.js",
     "dev": "concurrently \"nodemon server/index.js\" \"vite\"",
@@ -14,6 +25,10 @@
     "preview": "vite preview",
     "lint": "eslint ."
   },
+<<<<<<< HEAD
+=======
+>>>>>>> be5f99f6 (update visual)
+>>>>>>> bdf09fb1 (update visual)
   "dependencies": {
     "@capacitor/android": "^7.2.0",
     "@capacitor/cli": "^7.2.0",

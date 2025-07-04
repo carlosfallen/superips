@@ -1,4 +1,11 @@
-server/local.db
+# Ignorar dependências
 node_modules/
-node_modules/
+
+# Ignorar variáveis de ambiente
 .env
+
+# Ignorar banco de dados local
+local.db
+
+# Ignorar pasta de dados
+data/
