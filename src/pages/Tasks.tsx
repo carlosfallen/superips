@@ -8,90 +8,65 @@ import { Badge } from '../components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Checkbox } from '../components/ui/checkbox';
 import { useToast } from '../hooks/use-toast';
-
-interface Task {
-  id: number;
-  title: string;
-  description: string;
-  priority: 'low' | 'medium' | 'high';
-  status: 'pending' | 'in-progress' | 'completed';
-  category: string;
-  dueDate: string;
-  createdAt: string;
-  assignedTo?: string;
-}
+import { useTaskStore, Task } from '../store/tasks';
+import { apiService } from '../services/api';
+import LoadingSpinner from '../components/LoadingSpinner';
 
 export default function Tasks() {
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const { toast } = useToast();
+  const {
+    tasks,
+    isLoading,
+    error,
+    setTasks,
+    addTask,
+    updateTask,
+    removeTask,
+    setLoading,
+    setError,
+    getTasksByStatus,
+    getOverdueTasks
+  } = useTaskStore();
+
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterPriority, setFilterPriority] = useState<string>('all');
-  const { toast } = useToast();
 
   const [newTask, setNewTask] = useState({
     title: '',
     description: '',
     priority: 'medium' as const,
     category: '',
-    dueDate: '',
-    assignedTo: ''
+    due_date: '',
+    assigned_to: ''
   });
 
-  // Load tasks from localStorage on component mount
-  useEffect(() => {
-    const savedTasks = localStorage.getItem('tasks');
-    if (savedTasks) {
-      setTasks(JSON.parse(savedTasks));
-    } else {
-      // Sample tasks for demonstration
-      const sampleTasks: Task[] = [
-        {
-          id: 1,
-          title: 'Verificar impressoras do setor financeiro',
-          description: 'Realizar manutenção preventiva nas impressoras HP do setor financeiro',
-          priority: 'high',
-          status: 'pending',
-          category: 'Manutenção',
-          dueDate: '2024-01-20',
-          createdAt: '2024-01-15',
-          assignedTo: 'João Silva'
-        },
-        {
-          id: 2,
-          title: 'Atualizar sistema de monitoramento',
-          description: 'Implementar novas funcionalidades no sistema de monitoramento de rede',
-          priority: 'medium',
-          status: 'in-progress',
-          category: 'Desenvolvimento',
-          dueDate: '2024-01-25',
-          createdAt: '2024-01-10',
-          assignedTo: 'Maria Santos'
-        },
-        {
-          id: 3,
-          title: 'Backup dos servidores',
-          description: 'Realizar backup completo dos servidores principais',
-          priority: 'high',
-          status: 'completed',
-          category: 'Backup',
-          dueDate: '2024-01-18',
-          createdAt: '2024-01-12',
-          assignedTo: 'Carlos Tech'
-        }
-      ];
-      setTasks(sampleTasks);
-      localStorage.setItem('tasks', JSON.stringify(sampleTasks));
+  // Fetch tasks from API
+  const fetchTasks = async () => {
+    try {
+      setLoading(true);
+      const response = await apiService.getTasks();
+      setTasks(response.data);
+    } catch (error) {
+      console.error('Error fetching tasks:', error);
+      setError('Failed to fetch tasks');
+      toast({
+        title: "Erro",
+        description: "Falha ao carregar tarefas",
+        variant: "destructive"
+      });
+    } finally {
+      setLoading(false);
     }
+  };
+
+  useEffect(() => {
+    fetchTasks();
   }, []);
 
-  // Save tasks to localStorage whenever tasks change
-  useEffect(() => {
-    localStorage.setItem('tasks', JSON.stringify(tasks));
-  }, [tasks]);
-
-  const handleCreateTask = () => {
+  const handleCreateTask = async () => {
     if (!newTask.title.trim()) {
       toast({
         title: "Erro",
@@ -101,48 +76,74 @@ export default function Tasks() {
       return;
     }
 
-    const task: Task = {
-      id: Date.now(),
-      ...newTask,
-      status: 'pending',
-      createdAt: new Date().toISOString().split('T')[0]
-    };
-
-    setTasks(prev => [task, ...prev]);
-    setNewTask({
-      title: '',
-      description: '',
-      priority: 'medium',
-      category: '',
-      dueDate: '',
-      assignedTo: ''
-    });
-    setIsCreateModalOpen(false);
-    
-    toast({
-      title: "Sucesso",
-      description: "Tarefa criada com sucesso!"
-    });
+    try {
+      const response = await apiService.createTask(newTask);
+      addTask(response.data);
+      
+      setNewTask({
+        title: '',
+        description: '',
+        priority: 'medium',
+        category: '',
+        due_date: '',
+        assigned_to: ''
+      });
+      setIsCreateModalOpen(false);
+      
+      toast({
+        title: "Sucesso",
+        description: "Tarefa criada com sucesso!"
+      });
+    } catch (error) {
+      console.error('Error creating task:', error);
+      toast({
+        title: "Erro",
+        description: "Falha ao criar tarefa",
+        variant: "destructive"
+      });
+    }
   };
 
-  const handleUpdateTask = (taskId: number, updates: Partial<Task>) => {
-    setTasks(prev => prev.map(task => 
-      task.id === taskId ? { ...task, ...updates } : task
-    ));
-    
-    toast({
-      title: "Sucesso",
-      description: "Tarefa atualizada com sucesso!"
-    });
+  const handleUpdateTask = async (taskId: number, updates: Partial<Task>) => {
+    try {
+      const taskToUpdate = tasks.find(t => t.id === taskId);
+      if (!taskToUpdate) return;
+
+      const updatedTaskData = { ...taskToUpdate, ...updates };
+      const response = await apiService.updateTask(taskId, updatedTaskData);
+      updateTask(response.data);
+      
+      toast({
+        title: "Sucesso",
+        description: "Tarefa atualizada com sucesso!"
+      });
+    } catch (error) {
+      console.error('Error updating task:', error);
+      toast({
+        title: "Erro",
+        description: "Falha ao atualizar tarefa",
+        variant: "destructive"
+      });
+    }
   };
 
-  const handleDeleteTask = (taskId: number) => {
-    setTasks(prev => prev.filter(task => task.id !== taskId));
-    
-    toast({
-      title: "Sucesso",
-      description: "Tarefa excluída com sucesso!"
-    });
+  const handleDeleteTask = async (taskId: number) => {
+    try {
+      await apiService.deleteTask(taskId);
+      removeTask(taskId);
+      
+      toast({
+        title: "Sucesso",
+        description: "Tarefa excluída com sucesso!"
+      });
+    } catch (error) {
+      console.error('Error deleting task:', error);
+      toast({
+        title: "Erro",
+        description: "Falha ao excluir tarefa",
+        variant: "destructive"
+      });
+    }
   };
 
   const handleToggleStatus = (taskId: number) => {
@@ -199,6 +200,20 @@ export default function Tasks() {
     }
   };
 
+  // Statistics
+  const pendingTasks = getTasksByStatus('pending');
+  const inProgressTasks = getTasksByStatus('in-progress');
+  const completedTasks = getTasksByStatus('completed');
+  const overdueTasks = getOverdueTasks();
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <LoadingSpinner size="lg" text="Carregando tarefas..." />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -219,6 +234,65 @@ export default function Tasks() {
           <Plus className="h-4 w-4 mr-2" />
           Nova Tarefa
         </Button>
+      </div>
+
+      {/* Statistics Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-600 dark:text-gray-400">Pendentes</p>
+                <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+                  {pendingTasks.length}
+                </p>
+              </div>
+              <AlertCircle className="h-8 w-8 text-gray-500" />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-600 dark:text-gray-400">Em Progresso</p>
+                <p className="text-2xl font-bold text-blue-600">
+                  {inProgressTasks.length}
+                </p>
+              </div>
+              <Clock className="h-8 w-8 text-blue-500" />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-600 dark:text-gray-400">Concluídas</p>
+                <p className="text-2xl font-bold text-green-600">
+                  {completedTasks.length}
+                </p>
+              </div>
+              <CheckCircle2 className="h-8 w-8 text-green-500" />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-600 dark:text-gray-400">Atrasadas</p>
+                <p className="text-2xl font-bold text-red-600">
+                  {overdueTasks.length}
+                </p>
+              </div>
+              <AlertCircle className="h-8 w-8 text-red-500" />
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Filters */}
@@ -324,16 +398,16 @@ export default function Tasks() {
                   </div>
                 )}
                 
-                {task.dueDate && (
+                {task.due_date && (
                   <div className="flex items-center gap-2">
                     <Calendar className="h-3 w-3" />
-                    <span>Prazo: {new Date(task.dueDate).toLocaleDateString('pt-BR')}</span>
+                    <span>Prazo: {new Date(task.due_date).toLocaleDateString('pt-BR')}</span>
                   </div>
                 )}
                 
-                {task.assignedTo && (
+                {task.assigned_to && (
                   <div className="flex items-center gap-2">
-                    <span>Responsável: {task.assignedTo}</span>
+                    <span>Responsável: {task.assigned_to}</span>
                   </div>
                 )}
               </div>
@@ -415,16 +489,16 @@ export default function Tasks() {
                   <label className="text-sm font-medium mb-2 block">Prazo</label>
                   <Input
                     type="date"
-                    value={newTask.dueDate}
-                    onChange={(e) => setNewTask(prev => ({ ...prev, dueDate: e.target.value }))}
+                    value={newTask.due_date}
+                    onChange={(e) => setNewTask(prev => ({ ...prev, due_date: e.target.value }))}
                   />
                 </div>
 
                 <div>
                   <label className="text-sm font-medium mb-2 block">Responsável</label>
                   <Input
-                    value={newTask.assignedTo}
-                    onChange={(e) => setNewTask(prev => ({ ...prev, assignedTo: e.target.value }))}
+                    value={newTask.assigned_to}
+                    onChange={(e) => setNewTask(prev => ({ ...prev, assigned_to: e.target.value }))}
                     placeholder="Nome do responsável"
                   />
                 </div>
