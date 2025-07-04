@@ -1063,7 +1063,7 @@ const startServer = async () => {
     await initializeDatabase();
     startMonitoring();
     
-    const PORT = process.env.PORT || 5173;
+    const PORT = process.env.PORT || 5174;
     const HOST = process.env.HOST || '0.0.0.0';
     
     httpServer.listen(PORT, HOST, () => {
