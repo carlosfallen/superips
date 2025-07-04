@@ -1,18 +1,23 @@
 import { io, Socket } from 'socket.io-client';
 import { useDevicesStore } from '../store/devices';
 import { useNotificationStore } from '../store/notifications';
-import { useToast } from '../hooks/use-toast';
 
 class SocketService {
   private socket: Socket | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
+  private toastCallback: ((toast: any) => void) | null = null;
+
+  // Method to set toast callback from component
+  setToastCallback(callback: (toast: any) => void) {
+    this.toastCallback = callback;
+  }
 
   connect() {
     if (this.socket?.connected) return;
 
-    const serverUrl = `${import.meta.env.VITE_SERVER || 'http://localhost'}:${import.meta.env.VITE_PORT || '5173'}`;
+    const serverUrl = `${import.meta.env.VITE_SERVER || 'http://localhost'}:${import.meta.env.VITE_PORT || '5174'}`;
     
     this.socket = io(serverUrl, {
       transports: ['websocket', 'polling'],
@@ -47,13 +52,14 @@ class SocketService {
       console.log('📱 Device status update:', data);
       useDevicesStore.getState().updateDeviceStatus(data.id, data.status);
       
-      // Show toast notification
-      const { toast } = useToast();
-      toast({
-        title: data.status ? 'Dispositivo Online' : 'Dispositivo Offline',
-        description: `Status atualizado em tempo real`,
-        variant: data.status ? 'default' : 'destructive',
-      });
+      // Use callback instead of direct hook call
+      if (this.toastCallback) {
+        this.toastCallback({
+          title: data.status ? 'Dispositivo Online' : 'Dispositivo Offline',
+          description: `Status atualizado em tempo real`,
+          variant: data.status ? 'default' : 'destructive',
+        });
+      }
     });
 
     // Device updates
@@ -95,13 +101,14 @@ class SocketService {
       console.log('🔔 New notification:', notification);
       useNotificationStore.getState().addNotification(notification);
       
-      // Show toast notification
-      const { toast } = useToast();
-      toast({
-        title: notification.title,
-        description: notification.message,
-        variant: notification.type === 'error' ? 'destructive' : 'default',
-      });
+      // Use callback instead of direct hook call
+      if (this.toastCallback) {
+        this.toastCallback({
+          title: notification.title,
+          description: notification.message,
+          variant: notification.type === 'error' ? 'destructive' : 'default',
+        });
+      }
     });
 
     // Server status updates
