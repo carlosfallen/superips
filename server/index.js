@@ -21,18 +21,28 @@ const __dirname = dirname(__filename);
 // Initialize environment variables
 dotenv.config();
 
+// Ensure server directory exists
+const serverDir = path.join(process.cwd(), 'server');
+if (!fs.existsSync(serverDir)) {
+  fs.mkdirSync(serverDir, { recursive: true });
+}
+
+// Database path
+const dbPath = path.join(serverDir, 'local.db');
+console.log('Database path:', dbPath);
+
 // Initialize LibSQL client
 const db = createClient({
-  url: `file:${path.resolve(process.cwd(), 'server/local.db')}`,
+  url: `file:${dbPath}`,
 });
-
-console.log('Database path:', path.resolve(process.cwd(), 'server/local.db'));
 
 // Initialize Express app and Socket.io
 const app = express();
 
 const distPath = path.join(__dirname, '../dist');
-app.use(express.static(distPath));
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
+}
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -105,6 +115,31 @@ const safeDbExecute = async (sql, args = []) => {
   }
 };
 
+// Check if column exists in table
+const columnExists = async (tableName, columnName) => {
+  try {
+    const result = await safeDbExecute(`PRAGMA table_info(${tableName})`);
+    return result.rows.some(row => row.name === columnName);
+  } catch (error) {
+    console.error(`Error checking column ${columnName} in ${tableName}:`, error);
+    return false;
+  }
+};
+
+// Add column if it doesn't exist
+const addColumnIfNotExists = async (tableName, columnName, columnType, defaultValue = null) => {
+  try {
+    const exists = await columnExists(tableName, columnName);
+    if (!exists) {
+      const defaultClause = defaultValue ? ` DEFAULT ${defaultValue}` : '';
+      await safeDbExecute(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType}${defaultClause}`);
+      console.log(`Added column ${columnName} to ${tableName}`);
+    }
+  } catch (error) {
+    console.error(`Error adding column ${columnName} to ${tableName}:`, error);
+  }
+};
+
 // Initialize database tables
 const initializeDatabase = async () => {
   try {
@@ -114,12 +149,14 @@ const initializeDatabase = async () => {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
-        email TEXT,
-        role TEXT DEFAULT 'user',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        last_login DATETIME
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
+
+    // Add missing columns to users table
+    await addColumnIfNotExists('users', 'email', 'TEXT');
+    await addColumnIfNotExists('users', 'role', 'TEXT', "'user'");
+    await addColumnIfNotExists('users', 'last_login', 'DATETIME');
 
     // Devices table
     await safeDbExecute(`
@@ -131,20 +168,22 @@ const initializeDatabase = async () => {
         user TEXT,
         sector TEXT,
         status INTEGER DEFAULT 0,
-        online INTEGER DEFAULT 0,
-        login_username TEXT,
-        login_password TEXT,
-        wifi_ssid TEXT,
-        wifi_password TEXT,
-        hidden INTEGER DEFAULT 0,
-        model TEXT,
-        npat INTEGER DEFAULT 0,
-        li TEXT,
-        lf TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
+
+    // Add missing columns to devices table
+    await addColumnIfNotExists('devices', 'online', 'INTEGER', '0');
+    await addColumnIfNotExists('devices', 'login_username', 'TEXT');
+    await addColumnIfNotExists('devices', 'login_password', 'TEXT');
+    await addColumnIfNotExists('devices', 'wifi_ssid', 'TEXT');
+    await addColumnIfNotExists('devices', 'wifi_password', 'TEXT');
+    await addColumnIfNotExists('devices', 'hidden', 'INTEGER', '0');
+    await addColumnIfNotExists('devices', 'model', 'TEXT');
+    await addColumnIfNotExists('devices', 'npat', 'INTEGER', '0');
+    await addColumnIfNotExists('devices', 'li', 'TEXT');
+    await addColumnIfNotExists('devices', 'lf', 'TEXT');
+    await addColumnIfNotExists('devices', 'updated_at', 'DATETIME', 'CURRENT_TIMESTAMP');
 
     // Tasks table
     await safeDbExecute(`
@@ -250,7 +289,7 @@ app.post('/api/auth/login', async (req, res) => {
     await safeDbExecute('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?', [user.id]);
 
     const token = jwt.sign(
-      { id: user.id, username: user.username, role: user.role },
+      { id: user.id, username: user.username, role: user.role || 'user' },
       process.env.JWT_SECRET || 'TI',
       { expiresIn: '24h' }
     );
@@ -258,7 +297,7 @@ app.post('/api/auth/login', async (req, res) => {
     res.json({ 
       id: user.id, 
       username: user.username, 
-      role: user.role,
+      role: user.role || 'user',
       token 
     });
   } catch (error) {
@@ -277,8 +316,8 @@ app.post('/api/auth/register', async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const result = await safeDbExecute(
-      'INSERT INTO users (username, password_hash, email) VALUES (?, ?, ?)',
-      [username, hashedPassword, email || null]
+      'INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)',
+      [username, hashedPassword, email || null, 'user']
     );
 
     const userId = Number(result.lastInsertRowid);
@@ -290,7 +329,7 @@ app.post('/api/auth/register', async (req, res) => {
 
     res.json({ id: userId, username, role: 'user', token });
   } catch (error) {
-    if (error.message.includes('UNIQUE constraint failed')) {
+    if (error.message && error.message.includes('UNIQUE constraint failed')) {
       res.status(400).json({ error: 'Username already exists' });
     } else {
       console.error('Registration error:', error);
@@ -354,14 +393,12 @@ app.get('/api/devices/export', authenticateToken, async (req, res) => {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Devices');
 
-    const filePath = path.join(__dirname, 'temp', `devices_${Date.now()}.xlsx`);
-    
-    // Ensure temp directory exists
-    const tempDir = path.dirname(filePath);
+    const tempDir = path.join(__dirname, 'temp');
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }
 
+    const filePath = path.join(tempDir, `devices_${Date.now()}.xlsx`);
     XLSX.writeFile(wb, filePath);
 
     res.download(filePath, 'devices.xlsx', (err) => {
@@ -1008,11 +1045,11 @@ io.on('connection', (socket) => {
 });
 
 // Serve static files and handle SPA routing
-app.use(express.static(distPath));
-
-app.get('*', (req, res) => {
-  res.sendFile(path.join(distPath, 'index.html'));
-});
+if (fs.existsSync(distPath)) {
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+}
 
 // Error handling middleware
 app.use((error, req, res, next) => {
@@ -1031,7 +1068,7 @@ const startServer = async () => {
     
     httpServer.listen(PORT, HOST, () => {
       console.log(`🚀 Server running on http://${HOST}:${PORT}`);
-      console.log(`📊 Database: ${path.resolve(process.cwd(), 'server/local.db')}`);
+      console.log(`📊 Database: ${dbPath}`);
       console.log(`🔄 Device monitoring: Active`);
       console.log(`📡 WebSocket: Active`);
     });
