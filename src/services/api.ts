@@ -1,7 +1,18 @@
 import axios from 'axios';
 import { useAuthStore } from '../store/auth';
 
-const API_BASE_URL = `${import.meta.env.VITE_SERVER || 'http://localhost'}:${import.meta.env.VITE_PORT || '5173'}`;
+// Função para obter a URL base dinamicamente
+const getApiBaseUrl = () => {
+  // Se estiver em desenvolvimento, usar variáveis de ambiente
+  if (import.meta.env.DEV) {
+    return `${import.meta.env.VITE_SERVER || 'http://localhost'}:${import.meta.env.VITE_PORT || '5173'}`;
+  }
+  
+  // Em produção, usar a mesma origem (protocolo + hostname + porta)
+  return `${window.location.protocol}//${window.location.host}`;
+};
+
+const API_BASE_URL = getApiBaseUrl();
 
 // Create axios instance
 const api = axios.create({
