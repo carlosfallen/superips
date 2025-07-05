@@ -9,3 +9,5 @@ local.db
 
 # Ignorar pasta de dados
 data/
+
+dist/
