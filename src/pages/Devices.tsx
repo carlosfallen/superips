@@ -1,3 +1,4 @@
+// src/pages/Devices.tsx - Versão completa sem duplicidade de socket
 import { useEffect, useState } from 'react';
 import { useDevicesStore } from '../store/devices';
 import { 
@@ -5,10 +6,8 @@ import {
   ArrowRight, ArrowLeft, Edit2, X, Save, Loader2 
 } from 'lucide-react';
 import type { Device } from '../types';
-import { io } from 'socket.io-client';
 import { useAuthStore } from '../store/auth';
-
-const socket = io(`${import.meta.env.VITE_SERVER}:${import.meta.env.VITE_PORT}`);
+import { socketService } from '../services/socket';
 
 interface EditModalProps {
   device: Device;
@@ -177,12 +176,10 @@ export default function Devices() {
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filteredDevices, setFilteredDevices] = useState<Device[]>([]);
-  // já começamos ordenando por IP ascendente
-const [sortConfig, setSortConfig] = useState<{ key: keyof Device; direction: 'asc' | 'desc' }>({
-  key: 'ip',
-  direction: 'asc'
-});
-
+  const [sortConfig, setSortConfig] = useState<{ key: keyof Device; direction: 'asc' | 'desc' }>({
+    key: 'ip',
+    direction: 'asc'
+  });
   const [currentNetwork, setCurrentNetwork] = useState<'10.0' | '10.2' | '10.4'>('10.0');
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
 
@@ -198,7 +195,6 @@ const [sortConfig, setSortConfig] = useState<{ key: keyof Device; direction: 'as
           throw new Error('Authentication token is missing');
         }
         
-        // Sempre buscar da API devices padrão
         const response = await fetch(`${import.meta.env.VITE_SERVER}:${import.meta.env.VITE_PORT}/api/devices`, {
           headers: {
             'Authorization': `Bearer ${user.token}`,
@@ -226,59 +222,50 @@ const [sortConfig, setSortConfig] = useState<{ key: keyof Device; direction: 'as
 
     fetchDevices();
 
-    // Ouvir eventos de status para todas as redes
-    socket.on('deviceStatusUpdate', ({ id, status }) => {
-      updateDeviceStatus(id, status);
-    });
+    // Conecta ao socket service centralizado
+    socketService.connect();
 
-    return () => {
-      socket.off('deviceStatusUpdate');
-    };
-  }, [setDevices, updateDeviceStatus, user]);
+    // Cleanup não é necessário aqui pois o socketService é gerenciado globalmente
+    // Os eventos já são tratados automaticamente no socketService
+  }, [setDevices, user]);
 
-useEffect(() => {
-  // 1. Pega só a rede atual
-  let list = getDevicesByNetwork(currentNetwork);
+  useEffect(() => {
+    // Filtragem e ordenação
+    let list = getDevicesByNetwork(currentNetwork);
 
-  // 2. Filtra pelo termo de busca
-  list = list.filter(device =>
-    Object.values(device).some(value =>
-      String(value).toLowerCase().includes(searchTerm.toLowerCase())
-    )
-  );
+    list = list.filter(device =>
+      Object.values(device).some(value =>
+        String(value).toLowerCase().includes(searchTerm.toLowerCase())
+      )
+    );
 
-  // 3. Se houver sortConfig, aplica ordenação
-  if (sortConfig) {
-    const { key, direction } = sortConfig;
+    if (sortConfig) {
+      const { key, direction } = sortConfig;
 
-    // nossa função de converter IP pra número
-    const ipToNumber = (ip: string) =>
-      ip.split('.').map(Number).reduce((acc, oct) => (acc << 8) + oct, 0);
+      const ipToNumber = (ip: string) =>
+        ip.split('.').map(Number).reduce((acc, oct) => (acc << 8) + oct, 0);
 
-    list.sort((a, b) => {
-      // ordena IP numericamente
-      if (key === 'ip') {
-        const diff = ipToNumber(a.ip) - ipToNumber(b.ip);
-        return direction === 'asc' ? diff : -diff;
-      }
-      // outros campos
-      if (a[key] < b[key]) return direction === 'asc' ? -1 : 1;
-      if (a[key] > b[key]) return direction === 'asc' ? 1 : -1;
-      return 0;
-    });
-  }
+      list.sort((a, b) => {
+        if (key === 'ip') {
+          const diff = ipToNumber(a.ip) - ipToNumber(b.ip);
+          return direction === 'asc' ? diff : -diff;
+        }
+        if (a[key] < b[key]) return direction === 'asc' ? -1 : 1;
+        if (a[key] > b[key]) return direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
 
-  setFilteredDevices(list);
-}, [devices, searchTerm, currentNetwork, sortConfig]);
+    setFilteredDevices(list);
+  }, [devices, searchTerm, currentNetwork, sortConfig]);
 
-const handleSort = (key: keyof Device) => {
-  let direction: 'asc' | 'desc' = 'asc';
-  if (sortConfig?.key === key && sortConfig.direction === 'asc') {
-    direction = 'desc';
-  }
-  setSortConfig({ key, direction });
-};
-
+  const handleSort = (key: keyof Device) => {
+    let direction: 'asc' | 'desc' = 'asc';
+    if (sortConfig?.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
 
   const handleSaveDevice = async (updatedDevice: Device) => {
     try {
@@ -462,70 +449,120 @@ const handleSort = (key: keyof Device) => {
     );
   };
 
-  if (error) {
+  // Loading state
+  if (isLoading) {
     return (
-      <div className="bg-red-50 border border-red-200 rounded-2xl p-4 text-red-600">
-        Error: {error}
+      <div className="flex justify-center items-center h-64">
+        <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
       </div>
     );
   }
 
-  if (isLoading) {
+  // Error state
+  if (error) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+      <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-2xl p-4 text-center">
+        <div className="text-red-800 dark:text-red-200">
+          <h3 className="font-semibold mb-2">Erro ao carregar dispositivos</h3>
+          <p className="text-sm">{error}</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100">
-          Faixa de rede {currentNetwork}.11
+    <div className="space-y-6 p-4 md:p-6 lg:p-8">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between">
+        <h1 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-gray-100">
+          Dispositivos
         </h1>
-        
-        <div className="flex items-center space-x-4">
-          <div className="relative flex-1 md:flex-none">
-            <input
-              type="text"
-              placeholder="Buscar dispositivos..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full md:w-64 bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 rounded-2xl pl-10 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
-            />
-            <Search className="absolute left-3 top-2.5 h-5 w-5 text-gray-400 dark:text-gray-500" />
-          </div>
-          
-          <div className="flex items-center space-x-2">
-            <button 
+        <div className="mt-4 md:mt-0 flex items-center space-x-2">
+          <span className="text-sm text-gray-500 dark:text-gray-400">
+            Rede: {currentNetwork}.x
+          </span>
+          <div className="flex items-center space-x-1">
+            <button
               onClick={() => switchNetwork('prev')}
-              className="p-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 rounded-2xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+              className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
             >
-              <ArrowLeft className="w-5 h-5" />
+              <ArrowLeft className="w-4 h-4" />
             </button>
-            
-            <span className="text-sm text-gray-600 dark:text-gray-400 px-2">
-              {currentNetwork === '10.0' ? '1/3' : currentNetwork === '10.2' ? '2/3' : '3/3'}
-            </span>
-            
-            <button 
+            <button
               onClick={() => switchNetwork('next')}
-              className="p-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 rounded-2xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+              className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
             >
-              <ArrowRight className="w-5 h-5" />
+              <ArrowRight className="w-4 h-4" />
             </button>
           </div>
         </div>
       </div>
 
-      <div className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-        Mostrando {filteredDevices.length} dispositivos da rede {currentNetwork}.11
+      {/* Search Bar */}
+      <div className="relative">
+        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+          <Search className="h-5 w-5 text-gray-400" />
+        </div>
+        <input
+          type="text"
+          placeholder="Buscar dispositivos..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-2xl shadow-sm dark:shadow-gray-500/30 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-800 dark:text-white"
+        />
       </div>
 
-      <DesktopView />
-      <MobileView />
+      {/* Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg dark:shadow-gray-500/30 p-4">
+          <div className="text-center">
+            <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+              {filteredDevices.length}
+            </div>
+            <div className="text-sm text-gray-500 dark:text-gray-400">
+              Total de dispositivos
+            </div>
+          </div>
+        </div>
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg dark:shadow-gray-500/30 p-4">
+          <div className="text-center">
+            <div className="text-2xl font-bold text-green-600 dark:text-green-400">
+              {filteredDevices.filter(d => d.status === 1).length}
+            </div>
+            <div className="text-sm text-gray-500 dark:text-gray-400">
+              Online
+            </div>
+          </div>
+        </div>
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg dark:shadow-gray-500/30 p-4">
+          <div className="text-center">
+            <div className="text-2xl font-bold text-red-600 dark:text-red-400">
+              {filteredDevices.filter(d => d.status === 0).length}
+            </div>
+            <div className="text-sm text-gray-500 dark:text-gray-400">
+              Offline
+            </div>
+          </div>
+        </div>
+      </div>
 
+      {/* Device List */}
+      {filteredDevices.length === 0 ? (
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg dark:shadow-gray-500/30 p-8 text-center">
+          <div className="text-gray-500 dark:text-gray-400">
+            <Activity className="w-12 h-12 mx-auto mb-4 opacity-50" />
+            <p className="text-lg font-medium">Nenhum dispositivo encontrado</p>
+            <p className="text-sm">Tente ajustar os filtros de busca</p>
+          </div>
+        </div>
+      ) : (
+        <>
+          <DesktopView />
+          <MobileView />
+        </>
+      )}
+
+      {/* Edit Modal */}
       {editingDevice && (
         <EditModal
           device={editingDevice}

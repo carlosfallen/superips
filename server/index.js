@@ -5,7 +5,8 @@ import cors from 'cors';
 import { createClient } from '@libsql/client';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { Socket } from 'net';
+import net from 'net';
+const { Socket } = net;
 import dotenv from 'dotenv';
 import * as XLSX from 'xlsx';
 import fs from 'fs';
@@ -13,32 +14,44 @@ import path from 'path';
 import nodeSchedule from 'node-schedule';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { Worker, parentPort, workerData, isMainThread } from 'worker_threads';
+import os from 'os';
+import dns from 'dns';
 
-// Create __dirname equivalent
+// 1. Primeiro crie __dirname e __filename
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Initialize environment variables
+// 2. Inicialize as variáveis de ambiente
 dotenv.config();
 
-// Ensure server directory exists
-const serverDir = path.join(process.cwd(), 'server');
-if (!fs.existsSync(serverDir)) {
-  fs.mkdirSync(serverDir, { recursive: true });
+// 3. Inicialize as variáveis de controle
+let isInitialScanComplete = false;
+let isInitialScanInProgress = false;
+
+// 4. Configurações de diretório e banco de dados
+const dataDir = '/app/data';
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
 }
 
-// Database path
-const dbPath = path.join(serverDir, 'local.db');
+const dbPath = path.join(dataDir, 'local.db');
 console.log('Database path:', dbPath);
 
-// Initialize LibSQL client
 const db = createClient({
   url: `file:${dbPath}`,
+  busyTimeout: 60000, // 60 segundos
+  connectionPoolSize: 3,
+  // Adicione para melhor desempenho em alta concorrência
+  pragmas: {
+    journal_mode: 'WAL',
+    synchronous: 'NORMAL',
+    busy_timeout: 60000
+  }
 });
 
-// Initialize Express app and Socket.io
+// 6. Inicialize o Express e Socket.io
 const app = express();
-
 const distPath = path.join(__dirname, '../dist');
 if (fs.existsSync(distPath)) {
   app.use(express.static(distPath));
@@ -51,6 +64,15 @@ const io = new Server(httpServer, {
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
   },
 });
+
+// 7. Defina o workerPath (mas não crie o worker ainda)
+const workerPath = path.join(__dirname, 'worker.js');
+
+// Verifique se o arquivo worker.js existe
+if (!fs.existsSync(workerPath)) {
+  console.error('Arquivo worker.js não encontrado em:', workerPath);
+  process.exit(1);
+}
 
 app.use(cors());
 app.use(express.json());
@@ -140,6 +162,151 @@ const addColumnIfNotExists = async (tableName, columnName, columnType, defaultVa
   }
 };
 
+const networkRanges = [
+  '10.0.11.1-10.0.11.254',    // Faixa 10.0.11.x
+  '10.2.11.1-10.2.11.254',    // Faixa 10.2.11.x  
+  '10.4.11.1-10.4.11.254'     // Faixa 10.4.11.x
+];
+
+// Função para expandir uma faixa de IPs
+function expandIpRange(range) {
+  const [start, end] = range.split('-').map(ip => {
+    const parts = ip.split('.').map(Number);
+    return (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3];
+  });
+
+  const ips = [];
+  for (let i = start; i <= end; i++) {
+    const ip = [
+      (i >>> 24) & 0xFF,
+      (i >>> 16) & 0xFF,
+      (i >>> 8) & 0xFF,
+      i & 0xFF
+    ].join('.');
+    ips.push(ip);
+  }
+  return ips;
+}
+
+// Gerar todos os IPs das faixas
+const allIpsInRanges = networkRanges.flatMap(range => expandIpRange(range));
+
+// Função para verificar o status de um dispositivo
+async function resolveHostname(ip) {
+  // Tentar resolver via DNS reverso
+  try {
+    const hostnames = await dns.promises.reverse(ip);
+    if (hostnames.length > 0) return hostnames[0];
+  } catch {}
+
+  // Tentar resolver via NetBIOS (timeout rápido)
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    socket.setTimeout(500);
+    socket.on('error', () => resolve(null));
+    socket.on('timeout', () => resolve(null));
+    socket.connect(137, ip, () => {
+      socket.end();
+      resolve(`NODE-${ip.replace(/\./g, '-')}`);
+    });
+  });
+}
+
+async function ensureNetworkCoverage() {
+  try {
+    console.log('Verificando cobertura de rede...');
+    
+    // Obter IPs existentes no banco
+    const existingIpsResult = await safeDbExecute('SELECT ip FROM devices');
+    const existingIps = new Set(existingIpsResult.rows.map(row => row.ip));
+    
+    // Identificar IPs faltantes
+    const missingIps = allIpsInRanges.filter(ip => !existingIps.has(ip));
+    
+    if (missingIps.length === 0) {
+      console.log('Todos os IPs já estão no banco de dados');
+      return;
+    }
+    
+    console.log(`Inserindo ${missingIps.length} IPs faltantes...`);
+    
+    // Processar em lotes de 50 IPs
+    const batchSize = 250;
+    for (let i = 0; i < missingIps.length; i += batchSize) {
+      const batch = missingIps.slice(i, i + batchSize);
+      
+      // Processar lote atual
+      await Promise.all(batch.map(async (ip) => {
+        const hostname = await resolveHostname(ip);
+        await safeDbExecute(
+          'INSERT INTO devices (ip, name, type, status) VALUES (?, ?, ?, ?)',
+          [ip, hostname || ip, 'Desconhecido', 0]
+        );
+      }));
+      
+      console.log(`Processado lote ${i/batchSize + 1} de ${Math.ceil(missingIps.length/batchSize)}`);
+    }
+    
+    console.log('IPs faltantes inseridos com sucesso');
+  } catch (error) {
+    console.error('Erro na validação de cobertura:', error);
+  }
+}
+
+async function performInitialScan() {
+  return new Promise((resolve, reject) => {
+    console.log('Iniciando verificação de status paralela...');
+    isInitialScanInProgress = true;
+    
+    safeDbExecute('SELECT id, ip FROM devices').then((result) => {
+      const devices = result.rows;
+      if (devices.length === 0) {
+        console.log('Nenhum dispositivo encontrado para scan');
+        isInitialScanInProgress = false;
+        return resolve();
+      }
+      
+      const cpuCores = os.cpus().length;
+      const workersCount = Math.min(cpuCores, 4); // Reduz para no máximo 4 workers
+      const ipsPerWorker = Math.ceil(devices.length / workersCount);
+      
+      let completedWorkers = 0;
+      let updatedCount = 0;
+      
+      for (let i = 0; i < workersCount; i++) {
+        const startIdx = i * ipsPerWorker;
+        const endIdx = Math.min(startIdx + ipsPerWorker, devices.length);
+        const workerIps = devices.slice(startIdx, endIdx);
+        
+        const worker = new Worker(workerPath, {
+          workerData: { 
+            ips: workerIps,
+            dbUrl: `file:${dbPath}`
+          }
+        });
+        
+        worker.on('message', (count) => {
+          updatedCount += count;
+        });
+        
+        worker.on('error', (err) => {
+          console.error('Worker error:', err);
+          reject(err);
+        });
+        
+        worker.on('exit', (code) => {
+          completedWorkers++;
+          if (completedWorkers === workersCount) {
+            console.log(`Scan inicial completo! ${updatedCount} dispositivos atualizados`);
+            isInitialScanInProgress = false;
+            resolve();
+          }
+        });
+      }
+    }).catch(reject);
+  });
+}
+
 // Initialize database tables
 const initializeDatabase = async () => {
   try {
@@ -183,7 +350,7 @@ const initializeDatabase = async () => {
     await addColumnIfNotExists('devices', 'npat', 'INTEGER', '0');
     await addColumnIfNotExists('devices', 'li', 'TEXT');
     await addColumnIfNotExists('devices', 'lf', 'TEXT');
-    await addColumnIfNotExists('devices', 'updated_at', 'DATETIME', 'CURRENT_TIMESTAMP');
+    await addColumnIfNotExists('devices', 'updated_at', 'DATETIME');
 
     // Tasks table
     await safeDbExecute(`
@@ -200,37 +367,6 @@ const initializeDatabase = async () => {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (created_by) REFERENCES users(id)
-      )
-    `);
-
-    // Notifications table
-    await safeDbExecute(`
-      CREATE TABLE IF NOT EXISTS notifications (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        title TEXT NOT NULL,
-        message TEXT NOT NULL,
-        type TEXT DEFAULT 'info',
-        read INTEGER DEFAULT 0,
-        related_id TEXT,
-        device_name TEXT,
-        device_type TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users(id)
-      )
-    `);
-
-    // Ping history table
-    await safeDbExecute(`
-      CREATE TABLE IF NOT EXISTS ping_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        device_id INTEGER,
-        ip TEXT NOT NULL,
-        status INTEGER NOT NULL,
-        response_time REAL,
-        packet_loss REAL,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (device_id) REFERENCES devices(id)
       )
     `);
 
@@ -471,15 +607,6 @@ app.post('/api/printers/:id/online', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Printer not found' });
     }
 
-    // Create notification
-    await createNotification(
-      null, // broadcast to all users
-      online ? 'Impressora Online' : 'Impressora Offline',
-      `Status da impressora foi alterado para ${online ? 'online' : 'offline'}`,
-      online ? 'success' : 'warning',
-      id
-    );
-
     // Emit real-time update
     io.emit('printerStatusUpdate', { id: parseInt(id), online });
 
@@ -530,15 +657,6 @@ app.post('/api/boxes/:id/power-status', authenticateToken, async (req, res) => {
       [id]
     );
 
-    // Create notification
-    await createNotification(
-      null,
-      power_status ? 'Caixa Ligada' : 'Caixa Desligada',
-      `Caixa ${result.rows[0]?.name} foi ${power_status ? 'ligada' : 'desligada'}`,
-      power_status ? 'success' : 'warning',
-      id
-    );
-
     // Emit real-time update
     io.emit('boxStatusUpdate', { id: parseInt(id), power_status });
 
@@ -580,15 +698,6 @@ app.post('/api/tasks', authenticateToken, async (req, res) => {
 
     const taskId = result.lastInsertRowid;
     const newTask = await safeDbExecute('SELECT * FROM tasks WHERE id = ?', [taskId]);
-
-    // Create notification
-    await createNotification(
-      null,
-      'Nova Tarefa Criada',
-      `Tarefa "${title}" foi criada`,
-      'info',
-      taskId.toString()
-    );
 
     // Emit real-time update
     io.emit('taskCreated', newTask.rows[0]);
@@ -648,50 +757,6 @@ app.delete('/api/tasks/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Notification routes
-app.get('/api/notifications', authenticateToken, async (req, res) => {
-  try {
-    const result = await safeDbExecute(`
-      SELECT * FROM notifications 
-      WHERE user_id IS NULL OR user_id = ?
-      ORDER BY created_at DESC 
-      LIMIT 50
-    `, [req.user.id]);
-    
-    res.json(result.rows);
-  } catch (error) {
-    console.error('Error fetching notifications:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-app.put('/api/notifications/:id/read', authenticateToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    await safeDbExecute('UPDATE notifications SET read = 1 WHERE id = ?', [id]);
-    
-    res.json({ message: 'Notification marked as read' });
-  } catch (error) {
-    console.error('Error marking notification as read:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-app.put('/api/notifications/mark-all-read', authenticateToken, async (req, res) => {
-  try {
-    await safeDbExecute(
-      'UPDATE notifications SET read = 1 WHERE (user_id IS NULL OR user_id = ?) AND read = 0',
-      [req.user.id]
-    );
-    
-    res.json({ message: 'All notifications marked as read' });
-  } catch (error) {
-    console.error('Error marking all notifications as read:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
 // Settings routes
 app.get('/api/settings', authenticateToken, async (req, res) => {
   try {
@@ -736,7 +801,7 @@ app.put('/api/settings', authenticateToken, async (req, res) => {
 });
 
 // Server status route
-app.get('/api/server-status', authenticateToken, async (req, res) => {
+app.get('/api/server-status', async (req, res) => {
   try {
     const devicesResult = await safeDbExecute('SELECT COUNT(*) as count FROM devices');
     const devicesCount = devicesResult.rows[0]?.count || 0;
@@ -763,8 +828,6 @@ app.get('/api/server-status', authenticateToken, async (req, res) => {
     const seconds = uptime % 60;
     const uptimeString = `${days}d ${hours}h ${minutes}m ${seconds}s`;
     
-    const pingHistory = await getPingHistory(15);
-    
     res.json({
       devicesCount,
       onlineDevicesCount,
@@ -775,8 +838,7 @@ app.get('/api/server-status', authenticateToken, async (req, res) => {
       uptimeString,
       requestCount: serverStats.requestCount,
       activeConnections: serverStats.activeConnections,
-      lastRequests: serverStats.lastRequests.slice(0, 10),
-      pingHistory
+      lastRequests: serverStats.lastRequests.slice(0, 10)
     });
   } catch (error) {
     console.error('Error getting server status:', error);
@@ -784,132 +846,16 @@ app.get('/api/server-status', authenticateToken, async (req, res) => {
   }
 });
 
-// Helper function to create notifications
-const createNotification = async (userId, title, message, type = 'info', relatedId = null, deviceName = null, deviceType = null) => {
-  try {
-    await safeDbExecute(`
-      INSERT INTO notifications (user_id, title, message, type, related_id, device_name, device_type)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [userId, title, message, type, relatedId, deviceName, deviceType]);
-
-    // Emit real-time notification
-    io.emit('newNotification', {
-      title,
-      message,
-      type,
-      timestamp: new Date().toISOString(),
-      relatedId,
-      deviceName,
-      deviceType
-    });
-  } catch (error) {
-    console.error('Error creating notification:', error);
-  }
-};
-
-// Function to get ping history
-const getPingHistory = async (limit = 15) => {
-  try {
-    const result = await safeDbExecute(`
-      SELECT ph.*, d.name 
-      FROM ping_history ph
-      LEFT JOIN devices d ON ph.device_id = d.id
-      ORDER BY timestamp DESC
-      LIMIT ?
-    `, [limit]);
-    
-    return result.rows || [];
-  } catch (error) {
-    console.error('Error getting ping history:', error);
-    return [];
-  }
-};
-
-// Device monitoring system
-const checkDeviceStatus = async (ip, device) => {
-  try {
-    const commonPorts = [80, 443, 22, 21, 8080, 3389, 23, 25, 53, 110];
-    const timeout = 2000;
-    
-    const checkPort = (port) => {
-      return new Promise((resolve) => {
-        const socket = new Socket();
-        let resolved = false;
-        
-        socket.setTimeout(timeout);
-        
-        const cleanup = () => {
-          if (!resolved) {
-            resolved = true;
-            socket.destroy();
-          }
-        };
-        
-        socket.on('connect', () => {
-          cleanup();
-          resolve(true);
-        });
-        
-        socket.on('error', () => {
-          cleanup();
-          resolve(false);
-        });
-        
-        socket.on('timeout', () => {
-          cleanup();
-          resolve(false);
-        });
-        
-        try {
-          socket.connect(port, ip);
-        } catch (error) {
-          cleanup();
-          resolve(false);
-        }
-      });
-    };
-    
-    // Try multiple ports in parallel
-    const portChecks = commonPorts.slice(0, 3).map(port => checkPort(port));
-    const results = await Promise.all(portChecks);
-    const isOnline = results.some(result => result);
-    
-    await logPingResult(device, isOnline ? 1 : 0, { 
-      avg: isOnline ? timeout / 2 : 0, 
-      packetLoss: isOnline ? 0 : 100 
-    });
-    
-    return isOnline ? 1 : 0;
-    
-  } catch (error) {
-    console.error(`Error checking device status ${ip}:`, error);
-    await logPingResult(device, 0, { avg: 0, packetLoss: 100 });
-    return 0;
-  }
-};
-
-// Function to log ping results
-const logPingResult = async (device, status, result) => {
-  try {
-    await safeDbExecute(`
-      INSERT INTO ping_history 
-      (device_id, ip, status, response_time, packet_loss) 
-      VALUES (?, ?, ?, ?, ?)
-    `, [
-      device.id, 
-      device.ip,
-      status,
-      parseFloat(result.avg) || 0,
-      parseFloat(result.packetLoss) || 100
-    ]);
-  } catch (error) {
-    console.error('Error logging ping result:', error);
-  }
-};
-
 // Device monitoring process
 const processDevices = async () => {
+  if (!isInitialScanComplete || isInitialScanInProgress) {
+    console.log('Aguardando scan inicial...');
+    return;
+  }
   try {
+    // Não executar durante o scan inicial
+    if (isInitialScanInProgress) return;
+
     const result = await safeDbExecute('SELECT * FROM devices');
     const devices = result.rows;
 
@@ -917,52 +863,60 @@ const processDevices = async () => {
       return;
     }
 
-    const BATCH_SIZE = 20;
+    const BATCH_SIZE = 50;  // Aumentamos o tamanho do batch para melhor desempenho
+    const parallelChecks = 25; // Número de verificações simultâneas por batch
+    
     for (let i = 0; i < devices.length; i += BATCH_SIZE) {
       const batch = devices.slice(i, i + BATCH_SIZE);
       
-      const updates = await Promise.all(
-        batch.map(async (device) => {
-          const currentStatus = await checkDeviceStatus(device.ip, device);
-          return {
-            id: device.id,
-            currentStatus,
-            previousStatus: device.status,
-            device
-          };
-        })
-      );
+      // Executar verificações em paralelo dentro do batch
+      const updates = [];
+      for (let j = 0; j < batch.length; j += parallelChecks) {
+        const checkBatch = batch.slice(j, j + parallelChecks);
+        
+        const batchUpdates = await Promise.all(
+          checkBatch.map(async (device) => {
+            const currentStatus = await checkDeviceStatus(device.ip, device);
+            return {
+              id: device.id,
+              currentStatus,
+              previousStatus: device.status,
+              device
+            };
+          })
+        );
+        
+        updates.push(...batchUpdates);
+      }
 
       // Filter and update only changed devices
       const changes = updates.filter(u => u.currentStatus !== u.previousStatus);
       
-      for (const change of changes) {
-        await safeDbExecute(
-          'UPDATE devices SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-          [change.currentStatus, change.id]
+      // Atualizar em lote
+      if (changes.length > 0) {
+        const updatePromises = changes.map(change => 
+          safeDbExecute(
+            'UPDATE devices SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [change.currentStatus, change.id]
+          )
         );
 
-        // Create notification for status change
-        await createNotification(
-          null,
-          change.currentStatus ? 'Dispositivo Online' : 'Dispositivo Offline',
-          `${change.device.name} (${change.device.ip}) está ${change.currentStatus ? 'online' : 'offline'}`,
-          change.currentStatus ? 'success' : 'error',
-          change.id.toString(),
-          change.device.name,
-          change.device.type
-        );
-        
-        // Emit real-time update
-        io.emit('deviceStatusUpdate', {
-          id: change.id,
-          status: change.currentStatus,
-          timestamp: new Date().toISOString()
-        });
+        await Promise.all(updatePromises);
+
+        // Notificações e eventos em tempo real
+        for (const change of changes) {
+          io.emit('deviceStatusUpdate', {
+            id: change.id,
+            status: change.currentStatus,
+            timestamp: new Date().toISOString()
+          });
+        }
       }
       
-      // Small delay between batches
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Pequeno delay entre batches para evitar sobrecarga
+      if (i + BATCH_SIZE < devices.length) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
     }
   } catch (error) {
     console.error('Error in device monitoring:', error);
@@ -976,18 +930,6 @@ const startMonitoring = () => {
     console.log('Starting device monitoring cycle...');
     await processDevices();
     console.log('Device monitoring cycle completed');
-  });
-
-  // Clean old ping history every hour
-  nodeSchedule.scheduleJob('0 * * * *', async () => {
-    try {
-      await safeDbExecute(
-        'DELETE FROM ping_history WHERE timestamp < datetime("now", "-24 hours")'
-      );
-      console.log('Old ping history cleaned');
-    } catch (error) {
-      console.error('Error cleaning ping history:', error);
-    }
   });
 
   // Clean old notifications every day
@@ -1057,27 +999,47 @@ app.use((error, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Start server
+let serverStarted = false; // Adicione esta variável
+
 const startServer = async () => {
+  if (serverStarted) return;
+  serverStarted = true;
+
   try {
+    if (!fs.existsSync(dbPath)) {
+      fs.writeFileSync(dbPath, '');
+    }
+
     await initializeDatabase();
-    startMonitoring();
-    
-    const PORT = process.env.PORT || 5174;
+
+    // Inicie o servidor HTTP imediatamente
+    const PORT = process.env.PORT || 5173;
     const HOST = process.env.HOST || '0.0.0.0';
-    
     httpServer.listen(PORT, HOST, () => {
-      console.log(`🚀 Server running on http://${HOST}:${PORT}`);
-      console.log(`📊 Database: ${dbPath}`);
-      console.log(`🔄 Device monitoring: Active`);
-      console.log(`📡 WebSocket: Active`);
+      console.log(`🚀 Servidor rodando em http://${HOST}:${PORT}`);
     });
-    
+
+    // Rode as tarefas pesadas em background, sem bloquear o frontend
+    ensureNetworkCoverage()
+      .then(() => performInitialScan())
+      .then(() => {
+        isInitialScanComplete = true;
+        startMonitoring();
+      })
+      .catch((error) => {
+        console.error('Erro na inicialização em background:', error);
+      });
+
   } catch (error) {
-    console.error('Failed to start server:', error);
+    console.error('Falha ao iniciar servidor:', error);
     process.exit(1);
   }
 };
+
+// Mantenha apenas esta chamada
+if (isMainThread) {
+  startServer();
+}
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
@@ -1096,4 +1058,6 @@ process.on('SIGINT', () => {
   });
 });
 
-startServer();
+if (isMainThread) {
+  startServer();
+}

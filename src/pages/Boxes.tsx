@@ -41,36 +41,36 @@ export default function Boxes() {
     fetchBoxes();
   }, [user]);
 
-  const togglePowerStatus = async (device_id: number, newPowerStatus: 0 | 1) => {
-    try {
-      if (!user || !user.token) {
-        throw new Error('Authentication token is missing');
-      }
-
-      const response = await fetch(`http://localhost:5173/api/boxes/${device_id}/power-status`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${user.token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ power_status: newPowerStatus }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to update box power status');
-      }
-
-      setBoxes((prev) =>
-        prev.map((box) =>
-          box.device_id === device_id
-            ? { ...box, power_status: newPowerStatus }
-            : box
-        )
-      );
-    } catch (error) {
-      console.error('Failed to update box power status:', error);
+const togglePowerStatus = async (device_id: number, newPowerStatus: 0 | 1) => {
+  try {
+    if (!user || !user.token) {
+      throw new Error('Authentication token is missing');
     }
-  };
+
+    const response = await fetch(`${import.meta.env.VITE_SERVER}:${import.meta.env.VITE_PORT}/api/boxes/${device_id}/power-status`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${user.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ power_status: newPowerStatus }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to update box power status');
+    }
+
+    setBoxes((prev) =>
+      prev.map((box) =>
+        box.device_id === device_id
+          ? { ...box, power_status: newPowerStatus }
+          : box
+      )
+    );
+  } catch (error) {
+    console.error('Failed to update box power status:', error);
+  }
+};
 
   if (error) {
     return <div className="text-red-500 p-4">Error: {error}</div>;

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Badge } from './ui/badge';
 import { Wifi, WifiOff, Activity, Clock } from 'lucide-react';
 import { useSocket } from '../hooks/useSocket';
@@ -20,11 +20,46 @@ export const RealTimeStatus = ({
 }: RealTimeStatusProps) => {
   const [status, setStatus] = useState(initialStatus);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
-  const { isConnected } = useSocket();
+  const { isConnected, on, off } = useSocket();
+
+  // Callback para atualizar status
+  const handleStatusUpdate = useCallback((data: any) => {
+    if (data.deviceId === deviceId) {
+      setStatus(data.status);
+      setLastUpdate(new Date());
+      console.log(`📡 Status atualizado para dispositivo ${deviceId}:`, data.status);
+    }
+  }, [deviceId]);
+
+  // Callback para heartbeat
+  const handleHeartbeat = useCallback((data: any) => {
+    if (data.deviceId === deviceId) {
+      setLastUpdate(new Date());
+      console.log(`💓 Heartbeat recebido para dispositivo ${deviceId}`);
+    }
+  }, [deviceId]);
 
   useEffect(() => {
     setStatus(initialStatus);
   }, [initialStatus]);
+
+  useEffect(() => {
+    // Registrar listeners específicos para este dispositivo
+    const cleanupStatusUpdate = on('device_status_update', handleStatusUpdate);
+    const cleanupHeartbeat = on('device_heartbeat', handleHeartbeat);
+    
+    // Solicitar status atual do dispositivo
+    if (isConnected()) {
+      // Você pode emitir um evento para solicitar o status atual
+      // emit('request_device_status', { deviceId });
+    }
+
+    // Cleanup - remover listeners específicos
+    return () => {
+      cleanupStatusUpdate();
+      cleanupHeartbeat();
+    };
+  }, [deviceId, isConnected, on, handleStatusUpdate, handleHeartbeat]);
 
   const getStatusIcon = () => {
     const iconSize = size === 'sm' ? 'w-3 h-3' : size === 'lg' ? 'w-5 h-5' : 'w-4 h-4';

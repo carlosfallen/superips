@@ -41,7 +41,8 @@ export default defineConfig({
     })
   ],
   build: {
-    target: 'esnext'
+    target: 'esnext',
+    chunkSizeWarningLimit: 2000 
   },
   preview: {
     host: '0.0.0.0',

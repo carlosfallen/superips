@@ -80,11 +80,6 @@ export const apiService = {
   updateTask: (id: number, taskData: any) => api.put(`/api/tasks/${id}`, taskData),
   deleteTask: (id: number) => api.delete(`/api/tasks/${id}`),
 
-  // Notifications
-  getNotifications: () => api.get('/api/notifications'),
-  markNotificationAsRead: (id: number) => api.put(`/api/notifications/${id}/read`),
-  markAllNotificationsAsRead: () => api.put('/api/notifications/mark-all-read'),
-
   // Settings
   getSettings: () => api.get('/api/settings'),
   updateSettings: (settings: any) => api.put('/api/settings', settings),

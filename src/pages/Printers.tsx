@@ -42,45 +42,45 @@ export default function Printers() {
     fetchPrinters();
   }, [user]);
 
-  const handlePrinterOnlineChange = async (printerId: number, currentOnline: number) => {
-    if (updatingPrinters.has(printerId)) return;
-  
-    setUpdatingPrinters(prev => new Set(prev).add(printerId));
-  
-    try {
-      if (!user?.token) {
-        throw new Error('Authentication token is missing');
-      }
-  
-      const response = await fetch(`http://localhost:5173/api/printers/${printerId}/online`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${user.token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ online: currentOnline }),
-      });
-  
-      if (!response.ok) {
-        throw new Error('Failed to update printer status');
-      }
-  
-      setPrinters(prevPrinters =>
-        prevPrinters.map(printer =>
-          printer.id === printerId ? { ...printer, online: currentOnline } : printer
-        )
-      );
-  
-    } catch (error) {
-      console.error('Error updating printer online status:', error);
-    } finally {
-      setUpdatingPrinters(prev => {
-        const next = new Set(prev);
-        next.delete(printerId);
-        return next;
-      });
+const handlePrinterOnlineChange = async (printerId: number, currentOnline: number) => {
+  if (updatingPrinters.has(printerId)) return;
+
+  setUpdatingPrinters(prev => new Set(prev).add(printerId));
+
+  try {
+    if (!user?.token) {
+      throw new Error('Authentication token is missing');
     }
-  };
+
+    const response = await fetch(`${import.meta.env.VITE_SERVER}:${import.meta.env.VITE_PORT}/api/printers/${printerId}/online`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${user.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ online: currentOnline }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to update printer status');
+    }
+
+    setPrinters(prevPrinters =>
+      prevPrinters.map(printer =>
+        printer.id === printerId ? { ...printer, online: currentOnline } : printer
+      )
+    );
+
+  } catch (error) {
+    console.error('Error updating printer online status:', error);
+  } finally {
+    setUpdatingPrinters(prev => {
+      const next = new Set(prev);
+      next.delete(printerId);
+      return next;
+    });
+  }
+};
 
   if (isLoading) {
     return (

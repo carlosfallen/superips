@@ -20,3 +20,4 @@ COPY server ./server
 
 EXPOSE 5173
 CMD ["node", "server/index.js"]
+ 
