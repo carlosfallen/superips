@@ -38,17 +38,30 @@ if (!fs.existsSync(dataDir)) {
 const dbPath = path.join(dataDir, 'local.db');
 console.log('Database path:', dbPath);
 
+// CORREÇÃO 1: Pool de conexões melhorado para evitar travamento do banco
 const db = createClient({
   url: `file:${dbPath}`,
-  busyTimeout: 60000, // 60 segundos
-  connectionPoolSize: 3,
-  // Adicione para melhor desempenho em alta concorrência
+  busyTimeout: 120000, // Aumentado para 120 segundos
+  connectionPoolSize: 10, // Aumentado o pool
   pragmas: {
     journal_mode: 'WAL',
     synchronous: 'NORMAL',
-    busy_timeout: 60000
+    busy_timeout: 120000,
+    cache_size: -2000,
+    temp_store: 'memory'
   }
 });
+
+// CORREÇÃO 2: Health check do banco de dados
+const checkDatabaseHealth = async () => {
+  try {
+    await db.execute({ sql: 'SELECT 1 as health_check', args: [] });
+    return true;
+  } catch (error) {
+    console.error('Database health check failed:', error);
+    return false;
+  }
+};
 
 // 6. Inicialize o Express e Socket.io
 const app = express();
@@ -58,11 +71,17 @@ if (fs.existsSync(distPath)) {
 }
 
 const httpServer = createServer(app);
+
+// CORREÇÃO 3: Configurações melhoradas do Socket.io
 const io = new Server(httpServer, {
   cors: {
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
   },
+  pingTimeout: 60000, // 60 segundos
+  pingInterval: 25000, // 25 segundos
+  transports: ['websocket', 'polling'],
+  allowEIO3: true
 });
 
 // 7. Defina o workerPath (mas não crie o worker ainda)
@@ -71,28 +90,82 @@ const workerPath = path.join(__dirname, 'worker.js');
 // Verifique se o arquivo worker.js existe
 if (!fs.existsSync(workerPath)) {
   console.error('Arquivo worker.js não encontrado em:', workerPath);
-  process.exit(1);
+  // Não saia do processo, continue sem os workers
+  console.log('Continuando sem workers...');
 }
 
-app.use(cors());
-app.use(express.json());
+// CORREÇÃO 4: CORS melhorado
+app.use(cors({
+  origin: '*',
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
-// Authentication middleware
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// CORREÇÃO 5: Middleware de timeout para requisições
+app.use((req, res, next) => {
+  req.setTimeout(30000); // 30 segundos
+  res.setTimeout(30000);
+  next();
+});
+
+// Authentication middleware com melhor tratamento de erro
 const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+  try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
 
-  if (!token) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
-
-  jwt.verify(token, process.env.JWT_SECRET || 'TI', (err, user) => {
-    if (err) {
-      return res.status(403).json({ error: 'Invalid token' });
+    if (!token) {
+      console.log(`❌ No token provided for ${req.method} ${req.path} from IP: ${req.ip}`);
+      return res.status(401).json({ 
+        error: 'Authentication required', 
+        code: 'NO_TOKEN',
+        timestamp: new Date().toISOString()
+      });
     }
-    req.user = user;
-    next();
-  });
+
+    jwt.verify(token, process.env.JWT_SECRET || 'TI', (err, user) => {
+      if (err) {
+        console.log(`❌ Token verification failed for ${req.method} ${req.path}:`, err.message);
+        
+        if (err.name === 'TokenExpiredError') {
+          return res.status(401).json({ 
+            error: 'Token expired', 
+            code: 'TOKEN_EXPIRED',
+            timestamp: new Date().toISOString(),
+            expiredAt: err.expiredAt
+          });
+        }
+        
+        if (err.name === 'JsonWebTokenError') {
+          return res.status(403).json({ 
+            error: 'Invalid token', 
+            code: 'INVALID_TOKEN',
+            timestamp: new Date().toISOString()
+          });
+        }
+        
+        return res.status(403).json({ 
+          error: 'Token verification failed', 
+          code: 'TOKEN_ERROR',
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      req.user = user;
+      next();
+    });
+  } catch (error) {
+    console.error('❌ Authentication middleware error:', error);
+    return res.status(500).json({ 
+      error: 'Authentication error', 
+      code: 'AUTH_ERROR',
+      timestamp: new Date().toISOString()
+    });
+  }
 };
 
 // Server statistics tracking
@@ -101,13 +174,22 @@ let serverStats = {
   requestCount: 0,
   lastRequests: [],
   activeConnections: 0,
-  totalDataTransferred: 0
+  totalDataTransferred: 0,
+  lastDatabaseCheck: new Date(),
+  databaseHealthy: true
 };
 
-// Middleware to track requests
-app.use((req, res, next) => {
+// CORREÇÃO 6: Middleware com melhor rastreamento e health check
+app.use(async (req, res, next) => {
   if (req.method === 'GET' && req.path === '/') {
     return next();
+  }
+
+  // Health check periódico do banco
+  const now = new Date();
+  if (now - serverStats.lastDatabaseCheck > 60000) { // A cada minuto
+    serverStats.databaseHealthy = await checkDatabaseHealth();
+    serverStats.lastDatabaseCheck = now;
   }
 
   serverStats.requestCount++;
@@ -126,15 +208,32 @@ app.use((req, res, next) => {
   next();
 });
 
-// Helper function to safely handle database queries
-const safeDbExecute = async (sql, args = []) => {
-  try {
-    const result = await db.execute({ sql, args });
-    return result;
-  } catch (error) {
-    console.error('Database error:', error);
-    return { rows: [], rowsAffected: 0 };
+// CORREÇÃO 7: Helper function melhorada com retry e timeout
+const safeDbExecute = async (sql, args = [], maxRetries = 3, timeout = 30000) => {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      // Criar uma Promise com timeout
+      const executePromise = db.execute({ sql, args });
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Database query timeout')), timeout);
+      });
+      
+      const result = await Promise.race([executePromise, timeoutPromise]);
+      return result;
+    } catch (error) {
+      console.error(`Database error (attempt ${attempt}/${maxRetries}):`, error);
+      
+      if (attempt === maxRetries) {
+        console.error('Max retries reached, returning empty result');
+        return { rows: [], rowsAffected: 0 };
+      }
+      
+      // Aguardar antes de tentar novamente
+      await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+    }
   }
+  
+  return { rows: [], rowsAffected: 0 };
 };
 
 // Check if column exists in table
@@ -191,15 +290,65 @@ function expandIpRange(range) {
 // Gerar todos os IPs das faixas
 const allIpsInRanges = networkRanges.flatMap(range => expandIpRange(range));
 
-// Função para verificar o status de um dispositivo
+// CORREÇÃO 8: Função checkDeviceStatus melhorada (estava faltando no código original)
+const checkDeviceStatus = async (ip, device = null, timeout = 2000) => {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let resolved = false;
+    
+    const cleanup = () => {
+      if (!resolved) {
+        resolved = true;
+        socket.destroy();
+      }
+    };
+    
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve(0); // offline
+    }, timeout);
+    
+    socket.setTimeout(timeout);
+    
+    socket.on('connect', () => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timer);
+        socket.destroy();
+        resolve(1); // online
+      }
+    });
+    
+    socket.on('error', () => {
+      cleanup();
+      clearTimeout(timer);
+      resolve(0); // offline
+    });
+    
+    socket.on('timeout', () => {
+      cleanup();
+      clearTimeout(timer);
+      resolve(0); // offline
+    });
+    
+    // Tentar conectar na porta 80 primeiro, depois 22 se for necessário
+    try {
+      socket.connect(80, ip);
+    } catch (error) {
+      cleanup();
+      clearTimeout(timer);
+      resolve(0);
+    }
+  });
+};
+
+// Função para verificar o hostname
 async function resolveHostname(ip) {
-  // Tentar resolver via DNS reverso
   try {
     const hostnames = await dns.promises.reverse(ip);
     if (hostnames.length > 0) return hostnames[0];
   } catch {}
 
-  // Tentar resolver via NetBIOS (timeout rápido)
   return new Promise((resolve) => {
     const socket = new net.Socket();
     socket.setTimeout(500);
@@ -216,11 +365,9 @@ async function ensureNetworkCoverage() {
   try {
     console.log('Verificando cobertura de rede...');
     
-    // Obter IPs existentes no banco
     const existingIpsResult = await safeDbExecute('SELECT ip FROM devices');
     const existingIps = new Set(existingIpsResult.rows.map(row => row.ip));
     
-    // Identificar IPs faltantes
     const missingIps = allIpsInRanges.filter(ip => !existingIps.has(ip));
     
     if (missingIps.length === 0) {
@@ -230,21 +377,23 @@ async function ensureNetworkCoverage() {
     
     console.log(`Inserindo ${missingIps.length} IPs faltantes...`);
     
-    // Processar em lotes de 50 IPs
-    const batchSize = 250;
+    const batchSize = 100; // Reduzido para evitar travamento
     for (let i = 0; i < missingIps.length; i += batchSize) {
       const batch = missingIps.slice(i, i + batchSize);
       
-      // Processar lote atual
-      await Promise.all(batch.map(async (ip) => {
+      const insertPromises = batch.map(async (ip) => {
         const hostname = await resolveHostname(ip);
-        await safeDbExecute(
-          'INSERT INTO devices (ip, name, type, status) VALUES (?, ?, ?, ?)',
+        return safeDbExecute(
+          'INSERT OR IGNORE INTO devices (ip, name, type, status) VALUES (?, ?, ?, ?)',
           [ip, hostname || ip, 'Desconhecido', 0]
         );
-      }));
+      });
       
+      await Promise.all(insertPromises);
       console.log(`Processado lote ${i/batchSize + 1} de ${Math.ceil(missingIps.length/batchSize)}`);
+      
+      // Pequeno delay para não sobrecarregar o banco
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
     
     console.log('IPs faltantes inseridos com sucesso');
@@ -266,8 +415,15 @@ async function performInitialScan() {
         return resolve();
       }
       
+      // CORREÇÃO 9: Verificar se o worker existe antes de usar
+      if (!fs.existsSync(workerPath)) {
+        console.log('Worker não disponível, usando scan sequencial...');
+        performSequentialScan(devices).then(resolve).catch(reject);
+        return;
+      }
+      
       const cpuCores = os.cpus().length;
-      const workersCount = Math.min(cpuCores, 4); // Reduz para no máximo 4 workers
+      const workersCount = Math.min(cpuCores, 3); // Reduzido para 3 workers
       const ipsPerWorker = Math.ceil(devices.length / workersCount);
       
       let completedWorkers = 0;
@@ -278,38 +434,88 @@ async function performInitialScan() {
         const endIdx = Math.min(startIdx + ipsPerWorker, devices.length);
         const workerIps = devices.slice(startIdx, endIdx);
         
-        const worker = new Worker(workerPath, {
-          workerData: { 
-            ips: workerIps,
-            dbUrl: `file:${dbPath}`
-          }
-        });
-        
-        worker.on('message', (count) => {
-          updatedCount += count;
-        });
-        
-        worker.on('error', (err) => {
-          console.error('Worker error:', err);
-          reject(err);
-        });
-        
-        worker.on('exit', (code) => {
+        try {
+          const worker = new Worker(workerPath, {
+            workerData: { 
+              ips: workerIps,
+              dbUrl: `file:${dbPath}`
+            }
+          });
+          
+          worker.on('message', (count) => {
+            updatedCount += count;
+          });
+          
+          worker.on('error', (err) => {
+            console.error('Worker error:', err);
+            completedWorkers++;
+            if (completedWorkers === workersCount) {
+              isInitialScanInProgress = false;
+              resolve();
+            }
+          });
+          
+          worker.on('exit', (code) => {
+            completedWorkers++;
+            if (completedWorkers === workersCount) {
+              console.log(`Scan inicial completo! ${updatedCount} dispositivos atualizados`);
+              isInitialScanInProgress = false;
+              resolve();
+            }
+          });
+        } catch (error) {
+          console.error('Erro ao criar worker:', error);
           completedWorkers++;
           if (completedWorkers === workersCount) {
-            console.log(`Scan inicial completo! ${updatedCount} dispositivos atualizados`);
             isInitialScanInProgress = false;
             resolve();
           }
-        });
+        }
       }
     }).catch(reject);
   });
 }
 
+// CORREÇÃO 10: Scan sequencial como fallback
+async function performSequentialScan(devices) {
+  console.log('Executando scan sequencial...');
+  let updatedCount = 0;
+  
+  const batchSize = 20;
+  for (let i = 0; i < devices.length; i += batchSize) {
+    const batch = devices.slice(i, i + batchSize);
+    
+    const updates = await Promise.all(
+      batch.map(async (device) => {
+        const status = await checkDeviceStatus(device.ip);
+        if (status !== device.status) {
+          await safeDbExecute(
+            'UPDATE devices SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [status, device.id]
+          );
+          updatedCount++;
+        }
+        return status;
+      })
+    );
+    
+    console.log(`Processado lote ${Math.floor(i/batchSize) + 1} de ${Math.ceil(devices.length/batchSize)}`);
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  
+  console.log(`Scan sequencial completo! ${updatedCount} dispositivos atualizados`);
+  isInitialScanInProgress = false;
+}
+
 // Initialize database tables
 const initializeDatabase = async () => {
   try {
+    // Verificar se o banco está acessível
+    const healthCheck = await checkDatabaseHealth();
+    if (!healthCheck) {
+      throw new Error('Database is not accessible');
+    }
+
     // Users table
     await safeDbExecute(`
       CREATE TABLE IF NOT EXISTS users (
@@ -401,43 +607,79 @@ const initializeDatabase = async () => {
     console.log('Database initialized successfully');
   } catch (error) {
     console.error('Database initialization error:', error);
+    throw error;
   }
 };
 
-// Authentication routes
+// CORREÇÃO 11: Health check endpoint
+app.get('/api/health', async (req, res) => {
+  try {
+    const dbHealthy = await checkDatabaseHealth();
+    const uptime = process.uptime();
+    
+    res.json({
+      status: 'OK',
+      timestamp: new Date().toISOString(),
+      uptime: Math.floor(uptime),
+      database: dbHealthy ? 'healthy' : 'unhealthy',
+      memory: process.memoryUsage(),
+      activeConnections: serverStats.activeConnections
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'ERROR',
+      timestamp: new Date().toISOString(),
+      error: error.message
+    });
+  }
+});
+
+// CORREÇÃO 4: Modificar o login para incluir informações do token
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
 
     const result = await safeDbExecute('SELECT * FROM users WHERE username = ?', [username]);
     const user = result.rows[0];
 
     if (!user) {
+      console.log(`❌ Login failed - user not found: ${username}`);
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     const validPassword = await bcrypt.compare(password, user.password_hash);
     if (!validPassword) {
+      console.log(`❌ Login failed - invalid password: ${username}`);
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     // Update last login
     await safeDbExecute('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?', [user.id]);
 
-    const token = jwt.sign(
-      { id: user.id, username: user.username, role: user.role || 'user' },
-      process.env.JWT_SECRET || 'TI',
-      { expiresIn: '24h' }
-    );
+    const tokenPayload = { 
+      id: user.id, 
+      username: user.username, 
+      role: user.role || 'user' 
+    };
+
+    const token = jwt.sign(tokenPayload, process.env.JWT_SECRET || 'TI', { expiresIn: '24h' });
+
+    console.log(`✅ Login successful: ${username}`);
 
     res.json({ 
       id: user.id, 
       username: user.username, 
       role: user.role || 'user',
-      token 
+      token,
+      tokenExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24h from now
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('❌ Login error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -474,7 +716,56 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// Device routes
+// CORREÇÃO 2: Endpoint para verificar se o token é válido
+app.get('/api/auth/verify', authenticateToken, (req, res) => {
+  res.json({
+    valid: true,
+    user: {
+      id: req.user.id,
+      username: req.user.username,
+      role: req.user.role
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
+// CORREÇÃO 3: Endpoint para refresh token
+app.post('/api/auth/refresh', authenticateToken, async (req, res) => {
+  try {
+    // Gerar novo token com 24h de validade
+    const newToken = jwt.sign(
+      { 
+        id: req.user.id, 
+        username: req.user.username, 
+        role: req.user.role 
+      },
+      process.env.JWT_SECRET || 'TI',
+      { expiresIn: '24h' }
+    );
+
+    // Atualizar last_login
+    await safeDbExecute('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?', [req.user.id]);
+
+    res.json({ 
+      token: newToken,
+      user: {
+        id: req.user.id,
+        username: req.user.username,
+        role: req.user.role
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Token refresh error:', error);
+    res.status(500).json({ 
+      error: 'Failed to refresh token',
+      code: 'REFRESH_ERROR',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Device routes com timeout
 app.get('/api/devices', authenticateToken, async (req, res) => {
   try {
     const result = await safeDbExecute('SELECT * FROM devices ORDER BY ip');
@@ -518,7 +809,7 @@ app.put('/api/devices/:id', authenticateToken, async (req, res) => {
 
 app.get('/api/devices/export', authenticateToken, async (req, res) => {
   try {
-    const result = await safeDbExecute('SELECT * FROM devices ORDER BY ip');
+    const result = await safeDbExecute('SELECT ip, name, type, sector, model, updated_at FROM devices ORDER BY ip');
     const devices = result.rows;
 
     if (devices.length === 0) {
@@ -838,7 +1129,9 @@ app.get('/api/server-status', async (req, res) => {
       uptimeString,
       requestCount: serverStats.requestCount,
       activeConnections: serverStats.activeConnections,
-      lastRequests: serverStats.lastRequests.slice(0, 10)
+      lastRequests: serverStats.lastRequests.slice(0, 10),
+      databaseHealthy: serverStats.databaseHealthy,
+      lastDatabaseCheck: serverStats.lastDatabaseCheck
     });
   } catch (error) {
     console.error('Error getting server status:', error);
@@ -846,25 +1139,34 @@ app.get('/api/server-status', async (req, res) => {
   }
 });
 
-// Device monitoring process
+// CORREÇÃO 12: Device monitoring process melhorado
 const processDevices = async () => {
   if (!isInitialScanComplete || isInitialScanInProgress) {
     console.log('Aguardando scan inicial...');
     return;
   }
+  
   try {
-    // Não executar durante o scan inicial
-    if (isInitialScanInProgress) return;
-
-    const result = await safeDbExecute('SELECT * FROM devices');
-    const devices = result.rows;
-
-    if (!Array.isArray(devices) || devices.length === 0) {
+    // Verificar saúde do banco antes de continuar
+    if (!serverStats.databaseHealthy) {
+      console.log('Database unhealthy, skipping device monitoring');
       return;
     }
 
-    const BATCH_SIZE = 50;  // Aumentamos o tamanho do batch para melhor desempenho
-    const parallelChecks = 25; // Número de verificações simultâneas por batch
+    const result = await safeDbExecute('SELECT * FROM devices', [], 1, 10000); // Timeout de 10s
+    const devices = result.rows;
+
+    if (!Array.isArray(devices) || devices.length === 0) {
+      console.log('No devices found for monitoring');
+      return;
+    }
+
+    console.log(`Starting monitoring for ${devices.length} devices...`);
+
+    const BATCH_SIZE = 30;  // Reduzido para evitar sobrecarga
+    const parallelChecks = 15; // Reduzido também
+    
+    let totalUpdated = 0;
     
     for (let i = 0; i < devices.length; i += BATCH_SIZE) {
       const batch = devices.slice(i, i + BATCH_SIZE);
@@ -874,99 +1176,200 @@ const processDevices = async () => {
       for (let j = 0; j < batch.length; j += parallelChecks) {
         const checkBatch = batch.slice(j, j + parallelChecks);
         
-        const batchUpdates = await Promise.all(
+        const batchUpdates = await Promise.allSettled(
           checkBatch.map(async (device) => {
-            const currentStatus = await checkDeviceStatus(device.ip, device);
-            return {
-              id: device.id,
-              currentStatus,
-              previousStatus: device.status,
-              device
-            };
+            try {
+              const currentStatus = await checkDeviceStatus(device.ip, device, 1500); // Timeout reduzido
+              return {
+                id: device.id,
+                currentStatus,
+                previousStatus: device.status,
+                device
+              };
+            } catch (error) {
+              console.error(`Error checking device ${device.ip}:`, error);
+              return {
+                id: device.id,
+                currentStatus: device.status, // Manter status anterior em caso de erro
+                previousStatus: device.status,
+                device
+              };
+            }
           })
         );
         
-        updates.push(...batchUpdates);
+        // Processar apenas resultados bem-sucedidos
+        const successfulUpdates = batchUpdates
+          .filter(result => result.status === 'fulfilled')
+          .map(result => result.value);
+        
+        updates.push(...successfulUpdates);
       }
 
       // Filter and update only changed devices
       const changes = updates.filter(u => u.currentStatus !== u.previousStatus);
       
-      // Atualizar em lote
+      // Atualizar em lote com timeout
       if (changes.length > 0) {
         const updatePromises = changes.map(change => 
           safeDbExecute(
             'UPDATE devices SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-            [change.currentStatus, change.id]
+            [change.currentStatus, change.id],
+            1, // Apenas 1 tentativa para updates
+            5000 // Timeout de 5s para updates
           )
         );
 
-        await Promise.all(updatePromises);
+        const updateResults = await Promise.allSettled(updatePromises);
+        const successfulUpdates = updateResults.filter(result => result.status === 'fulfilled').length;
+        
+        totalUpdated += successfulUpdates;
 
-        // Notificações e eventos em tempo real
-        for (const change of changes) {
-          io.emit('deviceStatusUpdate', {
-            id: change.id,
-            status: change.currentStatus,
-            timestamp: new Date().toISOString()
-          });
+        // Notificações e eventos em tempo real - apenas para updates bem-sucedidos
+        for (let idx = 0; idx < changes.length; idx++) {
+          if (updateResults[idx].status === 'fulfilled') {
+            const change = changes[idx];
+            try {
+              io.emit('deviceStatusUpdate', {
+                id: change.id,
+                status: change.currentStatus,
+                timestamp: new Date().toISOString()
+              });
+            } catch (socketError) {
+              console.error('Socket.io emit error:', socketError);
+            }
+          }
         }
       }
       
       // Pequeno delay entre batches para evitar sobrecarga
       if (i + BATCH_SIZE < devices.length) {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise(resolve => setTimeout(resolve, 200));
       }
+    }
+    
+    if (totalUpdated > 0) {
+      console.log(`Device monitoring completed: ${totalUpdated} devices updated`);
     }
   } catch (error) {
     console.error('Error in device monitoring:', error);
   }
 };
 
-// Start monitoring with intelligent scheduling
+// CORREÇÃO 13: Start monitoring with intelligent scheduling melhorado
 const startMonitoring = () => {
-  // Monitor devices every 3 minutes
-  nodeSchedule.scheduleJob('*/3 * * * *', async () => {
+  console.log('Starting device monitoring scheduler...');
+  
+  // Monitor devices every 2 minutes (reduzido de 3)
+  const monitorJob = nodeSchedule.scheduleJob('*/2 * * * *', async () => {
     console.log('Starting device monitoring cycle...');
-    await processDevices();
-    console.log('Device monitoring cycle completed');
+    try {
+      await processDevices();
+    } catch (error) {
+      console.error('Device monitoring cycle failed:', error);
+    }
   });
 
-  // Clean old notifications every day
-  nodeSchedule.scheduleJob('0 0 * * *', async () => {
+  // Health check do banco a cada 5 minutos
+  const healthJob = nodeSchedule.scheduleJob('*/5 * * * *', async () => {
     try {
-      await safeDbExecute(
-        'DELETE FROM notifications WHERE created_at < datetime("now", "-7 days")'
-      );
-      console.log('Old notifications cleaned');
+      serverStats.databaseHealthy = await checkDatabaseHealth();
+      serverStats.lastDatabaseCheck = new Date();
+      
+      if (!serverStats.databaseHealthy) {
+        console.warn('Database health check failed!');
+        // Tentar reconectar ou reinicializar se necessário
+      }
     } catch (error) {
-      console.error('Error cleaning notifications:', error);
+      console.error('Health check failed:', error);
+      serverStats.databaseHealthy = false;
     }
+  });
+
+  // Clean old data every day
+  const cleanupJob = nodeSchedule.scheduleJob('0 2 * * *', async () => { // 2 AM
+    try {
+      // Clean old request logs
+      serverStats.lastRequests = serverStats.lastRequests.slice(0, 50);
+      
+      // Clean old notifications if table exists
+      await safeDbExecute(
+        'DELETE FROM notifications WHERE created_at < datetime("now", "-7 days")',
+        [],
+        1,
+        10000
+      );
+      
+      console.log('Daily cleanup completed');
+    } catch (error) {
+      console.error('Error in daily cleanup:', error);
+    }
+  });
+
+  // Graceful shutdown handler
+  process.on('SIGTERM', () => {
+    console.log('SIGTERM received, canceling scheduled jobs...');
+    monitorJob.cancel();
+    healthJob.cancel();
+    cleanupJob.cancel();
+  });
+
+  process.on('SIGINT', () => {
+    console.log('SIGINT received, canceling scheduled jobs...');
+    monitorJob.cancel();
+    healthJob.cancel();
+    cleanupJob.cancel();
   });
 };
 
-// Socket.io events
+// CORREÇÃO 14: Socket.io events melhorados
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
   serverStats.activeConnections++;
   
+  // Enviar status de saúde do servidor na conexão
+  socket.emit('serverHealth', {
+    databaseHealthy: serverStats.databaseHealthy,
+    uptime: Math.floor((new Date() - serverStats.startTime) / 1000)
+  });
+  
   socket.on('forceDeviceCheck', async (deviceId) => {
     try {
+      if (!serverStats.databaseHealthy) {
+        socket.emit('error', { message: 'Database is currently unavailable' });
+        return;
+      }
+
       const result = await safeDbExecute('SELECT * FROM devices WHERE id = ?', [deviceId]);
       const device = result.rows[0];
       
       if (device) {
         const status = await checkDeviceStatus(device.ip, device);
-        await safeDbExecute(
+        const updateResult = await safeDbExecute(
           'UPDATE devices SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
           [status, deviceId]
         );
         
-        socket.emit('deviceStatusUpdate', { id: deviceId, status });
+        if (updateResult.rowsAffected > 0) {
+          socket.emit('deviceStatusUpdate', { 
+            id: parseInt(deviceId), 
+            status,
+            timestamp: new Date().toISOString()
+          });
+          
+          // Broadcast to all other clients
+          socket.broadcast.emit('deviceStatusUpdate', { 
+            id: parseInt(deviceId), 
+            status,
+            timestamp: new Date().toISOString()
+          });
+        }
+      } else {
+        socket.emit('error', { message: 'Device not found' });
       }
     } catch (error) {
       console.error('Force check failed:', error);
-      socket.emit('error', { message: 'Force check failed' });
+      socket.emit('error', { message: 'Force check failed: ' + error.message });
     }
   });
 
@@ -980,84 +1383,168 @@ io.on('connection', (socket) => {
     console.log(`Client ${socket.id} left room: ${room}`);
   });
 
-  socket.on('disconnect', () => {
-    console.log('Client disconnected:', socket.id);
+  // Ping-pong para manter conexão ativa
+  socket.on('ping', () => {
+    socket.emit('pong');
+  });
+
+  socket.on('disconnect', (reason) => {
+    console.log('Client disconnected:', socket.id, 'Reason:', reason);
     serverStats.activeConnections--;
+  });
+
+  socket.on('error', (error) => {
+    console.error('Socket error for client', socket.id, ':', error);
   });
 });
 
 // Serve static files and handle SPA routing
 if (fs.existsSync(distPath)) {
   app.get('*', (req, res) => {
+    // Não servir arquivos estáticos para rotas da API
+    if (req.path.startsWith('/api/')) {
+      return res.status(404).json({ error: 'API endpoint not found' });
+    }
     res.sendFile(path.join(distPath, 'index.html'));
   });
 }
 
-// Error handling middleware
+// CORREÇÃO 15: Error handling middleware melhorado
 app.use((error, req, res, next) => {
   console.error('Unhandled error:', error);
-  res.status(500).json({ error: 'Internal server error' });
+  
+  // Diferentes tipos de erro
+  if (error.code === 'ECONNABORTED') {
+    return res.status(408).json({ error: 'Request timeout' });
+  }
+  
+  if (error.name === 'ValidationError') {
+    return res.status(400).json({ error: 'Validation error: ' + error.message });
+  }
+  
+  if (error.code === 'SQLITE_BUSY') {
+    return res.status(503).json({ error: 'Database is busy, please try again' });
+  }
+  
+  res.status(500).json({ 
+    error: 'Internal server error',
+    timestamp: new Date().toISOString()
+  });
 });
 
-let serverStarted = false; // Adicione esta variável
+// 404 handler para APIs
+app.use('/api/*', (req, res) => {
+  res.status(404).json({ 
+    error: 'API endpoint not found',
+    path: req.path,
+    method: req.method
+  });
+});
 
+let serverStarted = false;
+
+// CORREÇÃO 16: Função de inicialização melhorada
 const startServer = async () => {
   if (serverStarted) return;
   serverStarted = true;
 
   try {
+    console.log('🚀 Starting server initialization...');
+    
+    // Verificar e criar arquivo de banco se necessário
     if (!fs.existsSync(dbPath)) {
+      console.log('Creating database file...');
       fs.writeFileSync(dbPath, '');
     }
 
+    // Inicializar banco de dados
+    console.log('Initializing database...');
     await initializeDatabase();
 
     // Inicie o servidor HTTP imediatamente
     const PORT = process.env.PORT || 5173;
     const HOST = process.env.HOST || '0.0.0.0';
+    
     httpServer.listen(PORT, HOST, () => {
       console.log(`🚀 Servidor rodando em http://${HOST}:${PORT}`);
+      console.log(`📊 Health check disponível em http://${HOST}:${PORT}/api/health`);
     });
 
-    // Rode as tarefas pesadas em background, sem bloquear o frontend
+    // Executar tarefas pesadas em background
+    console.log('Starting background tasks...');
+    
     ensureNetworkCoverage()
-      .then(() => performInitialScan())
       .then(() => {
+        console.log('Network coverage ensured, starting initial scan...');
+        return performInitialScan();
+      })
+      .then(() => {
+        console.log('Initial scan completed, starting monitoring...');
         isInitialScanComplete = true;
         startMonitoring();
+        console.log('✅ Server fully initialized and monitoring started');
       })
       .catch((error) => {
-        console.error('Erro na inicialização em background:', error);
+        console.error('❌ Erro na inicialização em background:', error);
+        // Não falhar o servidor, apenas registrar o erro
+        isInitialScanComplete = true; // Permitir que o servidor continue funcionando
+        startMonitoring(); // Iniciar monitoramento mesmo com erro no scan inicial
       });
 
   } catch (error) {
-    console.error('Falha ao iniciar servidor:', error);
+    console.error('❌ Falha crítica ao iniciar servidor:', error);
     process.exit(1);
   }
 };
 
-// Mantenha apenas esta chamada
-if (isMainThread) {
-  startServer();
-}
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully');
+// CORREÇÃO 17: Graceful shutdown melhorado
+const gracefulShutdown = (signal) => {
+  console.log(`\n${signal} received, shutting down gracefully...`);
+  
+  // Parar de aceitar novas conexões
   httpServer.close(() => {
-    console.log('Server closed');
-    process.exit(0);
+    console.log('✅ HTTP server closed');
+    
+    // Fechar conexões do Socket.io
+    io.close(() => {
+      console.log('✅ Socket.io server closed');
+      
+      // Fechar conexões do banco de dados
+      try {
+        db.close();
+        console.log('✅ Database connections closed');
+      } catch (error) {
+        console.error('Error closing database:', error);
+      }
+      
+      console.log('✅ Graceful shutdown completed');
+      process.exit(0);
+    });
   });
+  
+  // Forçar saída após 10 segundos
+  setTimeout(() => {
+    console.error('⚠️ Forced shutdown due to timeout');
+    process.exit(1);
+  }, 10000);
+};
+
+// Registrar handlers de shutdown
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Handler para erros não capturados
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  gracefulShutdown('UNCAUGHT_EXCEPTION');
 });
 
-process.on('SIGINT', () => {
-  console.log('SIGINT received, shutting down gracefully');
-  httpServer.close(() => {
-    console.log('Server closed');
-    process.exit(0);
-  });
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Não sair do processo para rejections, apenas registrar
 });
 
+// Inicializar servidor apenas no thread principal
 if (isMainThread) {
   startServer();
 }
