@@ -1,4 +1,4 @@
-// src/pages/Devices.tsx - Versão completa sem duplicidade de socket
+// src/pages/Devices.tsx - Versão corrigida com useAuth hook
 import { useEffect, useState } from 'react';
 import { useDevicesStore } from '../store/devices';
 import { 
@@ -6,8 +6,9 @@ import {
   ArrowRight, ArrowLeft, Edit2, X, Save, Loader2 
 } from 'lucide-react';
 import type { Device } from '../types';
-import { useAuthStore } from '../store/auth';
+import { useAuth } from '../hooks/useAuth'; // Usar o hook useAuth em vez de useAuthStore
 import { socketService } from '../services/socket';
+import { apiService } from '../services/api';
 
 interface EditModalProps {
   device: Device;
@@ -170,8 +171,8 @@ const EditModal = ({ device, onClose, onSave }: EditModalProps) => {
 };
 
 export default function Devices() {
-  const { user } = useAuthStore();
-  const { devices, setDevices, updateDeviceStatus, updateDevice } = useDevicesStore();
+  const { getToken } = useAuth(); // Usar useAuth em vez de useAuthStore
+  const { devices, setDevices, updateDevice } = useDevicesStore();
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -191,30 +192,33 @@ export default function Devices() {
   useEffect(() => {
     const fetchDevices = async () => {
       try {
-        if (!user?.token) {
+        // Obter token válido através do hook useAuth
+        const token = await getToken();
+        if (!token) {
           throw new Error('Authentication token is missing');
         }
         
-        const response = await fetch(`${import.meta.env.VITE_SERVER}:${import.meta.env.VITE_PORT}/api/devices`, {
-          headers: {
-            'Authorization': `Bearer ${user.token}`,
-            'Content-Type': 'application/json'
-          }
-        });
+        const response = await apiService.getDevices();
         
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.message || 'Failed to fetch devices');
+        // Para Axios, verificamos response.status em vez de response.ok
+        if (response.status < 200 || response.status >= 300) {
+          const errorData = response.data;
+          throw new Error(errorData?.message || 'Failed to fetch devices');
         }
 
-        const data: Device[] = await response.json();
+        const data: Device[] = response.data;
         setDevices(Array.isArray(data) ? data : []);
-      } catch (error) {
+      } catch (error: any) {
         let errorMessage = 'Failed to fetch devices';
-        if (error instanceof TypeError) {
+        if (error.code === 'ECONNREFUSED' || error.code === 'ERR_NETWORK') {
           errorMessage = 'Network error - check server connection';
+        } else if (error.response?.data?.message) {
+          errorMessage = error.response.data.message;
+        } else if (error.message) {
+          errorMessage = error.message;
         }
         setError(errorMessage);
+        console.error('Error fetching devices:', error);
       } finally {
         setIsLoading(false);
       }
@@ -227,7 +231,7 @@ export default function Devices() {
 
     // Cleanup não é necessário aqui pois o socketService é gerenciado globalmente
     // Os eventos já são tratados automaticamente no socketService
-  }, [setDevices, user]);
+  }, [setDevices, getToken]);
 
   useEffect(() => {
     // Filtragem e ordenação
@@ -269,30 +273,33 @@ export default function Devices() {
 
   const handleSaveDevice = async (updatedDevice: Device) => {
     try {
-      if (!user?.token) {
+      // Obter token válido através do hook useAuth
+      const token = await getToken();
+      if (!token) {
         throw new Error('Authentication token is missing');
       }
       
-      const response = await fetch(`${import.meta.env.VITE_SERVER}:${import.meta.env.VITE_PORT}/api/devices/${updatedDevice.id}`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${user.token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(updatedDevice)
-      });
+      const response = await apiService.updateDevice(updatedDevice.id, updatedDevice);
       
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to update device');
+      // Para Axios, verificamos response.status em vez de response.ok
+      if (response.status < 200 || response.status >= 300) {
+        const errorData = response.data;
+        throw new Error(errorData?.message || 'Failed to update device');
       }
 
-      const updatedData = await response.json();
+      const updatedData = response.data;
       updateDevice(updatedData);
       
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating device:', error);
-      throw error;
+      // Melhor tratamento de erro para Axios
+      if (error.response?.data?.message) {
+        throw new Error(error.response.data.message);
+      } else if (error.message) {
+        throw new Error(error.message);
+      } else {
+        throw new Error('Failed to update device');
+      }
     }
   };
 
