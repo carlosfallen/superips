@@ -1,44 +1,48 @@
-import { useState } from 'react';
+import { useState } from 'react'
 import { 
   Menu, X, LayoutGrid, Router, Printer, Box, 
-  LogOut, Moon, Sun, Search, Sheet, CheckSquare, Settings
-} from 'lucide-react';
-import { useLocation, Link, Outlet } from 'react-router-dom';
-import { useAuthStore } from '../store/auth';
-import { useTheme } from '../contexts/theme';
-import { HeaderDropdowns } from './PopUp';
+  LogOut, Moon, Sun, Sheet, CheckSquare, Settings, Home
+} from 'lucide-react'
+import { useAuthStore } from '../store/auth'
+import { useTheme } from '../contexts/theme'
+import { HeaderDropdowns } from './PopUp'
+import { useNavigationStore, Page } from '../store/navigation'
 
-export default function Layout() {
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const { isDarkMode, toggleDarkMode } = useTheme();
-  const location = useLocation();
-  const logout = useAuthStore((state) => state.logout);
+export default function Layout({ children }: { children?: React.ReactNode }) {
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+  const { isDarkMode, toggleDarkMode } = useTheme()
+  const logout = useAuthStore((state) => state.logout)
+  const currentPage = useNavigationStore((state) => state.currentPage)
+  const setPage = useNavigationStore((state) => state.setPage)
 
-  const navigation = [
-    { name: 'Dispositivos', href: '/', icon: LayoutGrid },
-    { name: 'Roteadores', href: '/routers', icon: Router },
-    { name: 'Impressoras', href: '/printers', icon: Printer },
-    { name: 'Caixas', href: '/boxes', icon: Box },
-    { name: 'Tarefas', href: '/tasks', icon: CheckSquare },
-    { name: 'Planilha', href: '/sheet', icon: Sheet },
-    { name: 'Configurações', href: '/settings', icon: Settings },
-  ];
+const navigation: { name: string; href: Page; icon: React.ComponentType<any> }[] = [
+  { name: 'Iniçio', href: 'dashboard', icon: Home },
+  { name: 'Dispositivos', href: 'devices', icon: LayoutGrid },
+  { name: 'Roteadores', href: 'routers', icon: Router },
+  { name: 'Impressoras', href: 'printers', icon: Printer },
+  { name: 'Caixas', href: 'boxes', icon: Box },
+  { name: 'Tarefas', href: 'tasks', icon: CheckSquare },
+  { name: 'Planilha', href: 'sheet', icon: Sheet },
+  { name: 'Configurações', href: 'settings', icon: Settings },
+];
 
   type NavigationItem = {
-    name: string;
-    href: string;
-    icon: React.ComponentType<any>;
-  };
+    name: string
+    href: string
+    icon: React.ComponentType<any>
+  }
   
   const NavLink: React.FC<{ item: NavigationItem; mobile?: boolean }> = ({ item, mobile = false }) => {
-    const Icon = item.icon;
-    const isActive = location.pathname === item.href;
+    const Icon = item.icon
+    const isActive = currentPage === item.href
     
     return (
-      <Link
+      <button
         key={item.name}
-        to={item.href}
-        onClick={() => mobile && setIsMobileMenuOpen(false)}
+        onClick={() => {
+          setPage(item.href)
+          if (mobile) setIsMobileMenuOpen(false)
+        }}
         className={`group w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-2xl transition-all duration-300 transform hover:scale-105
           ${
             isActive
@@ -52,9 +56,9 @@ export default function Layout() {
         {isActive && (
           <div className="ml-auto w-2 h-2 bg-white rounded-full animate-pulse" />
         )}
-      </Link>
-    );
-  };
+      </button>
+    )
+  }
   
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 text-gray-900 dark:text-gray-100">
@@ -126,10 +130,10 @@ export default function Layout() {
       <main className="md:ml-72 pt-20">
         <div className="py-8">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8">
-            <Outlet />
+            {children}
           </div>
         </div>
       </main>
     </div>
-  );
+  )
 }

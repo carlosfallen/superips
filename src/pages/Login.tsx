@@ -1,37 +1,36 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { useAuthStore } from '../store/auth';
+import { useAuth } from '../hooks/useAuth';
 import { LogIn } from 'lucide-react';
 
-export default function Login() {
-  const navigate = useNavigate();
-  const setUser = useAuthStore((state) => state.setUser);
+type LoginProps = {
+  onLoginSuccess: () => void;
+};
+
+export default function Login({ onLoginSuccess }: LoginProps) {
+  const { login } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
+const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  e.preventDefault();
+  setError('');
+  setIsLoading(true);
 
-    try {
-      const response = await fetch(`${import.meta.env.VITE_SERVER}:${import.meta.env.VITE_PORT}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Invalid credentials');
-      }
-
-      const data = await response.json();
-      setUser(data);
-      navigate('/');
-    } catch (err) {
-      setError('Invalid username or password');
+  try {
+    const success = await login(username, password);
+    if (success) {
+      onLoginSuccess(); // pode redirecionar ou abrir dashboard
+    } else {
+      setError('Usuário ou senha inválidos');
     }
-  };
+  } catch (err) {
+    setError('Falha no login. Tente novamente.');
+  } finally {
+    setIsLoading(false);
+  }
+};
 
   return (
     <div className="min-h-screen bg-gray-100 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
@@ -87,19 +86,12 @@ export default function Login() {
             <button
               type="submit"
               className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+              disabled={isLoading}
             >
-              Entrar
+              {isLoading ? 'Entrando...' : 'Entrar'}
             </button>
           </div>
         </form>
-{/*         <div className="text-center">
-          <Link
-            to="/register"
-            className="font-medium text-blue-600 hover:text-blue-500"
-          >
-          Registrar
-          </Link>
-        </div> */}
       </div>
     </div>
   );

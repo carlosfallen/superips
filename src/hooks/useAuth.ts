@@ -1,83 +1,104 @@
-import { useCallback } from 'react';
-import { useAuthStore, User } from '../store/auth';
-import { apiService } from '../services/api'; // ou onde estiver sua API
+import { create } from 'zustand';
+import axios from 'axios';
 
-interface LoginCredentials {
-  username: string;
-  password: string;
+interface AuthState {
+  isAuthenticated: boolean;
+  user: any | null;
+  token: string | null;
+  loading: boolean;
+  error: string | null;
+  login: (username: string, password: string) => Promise<void>;
+  logout: () => void;
+  checkAuth: () => Promise<boolean>;
+  setLoading: (loading: boolean) => void;
 }
 
-interface LoginResponse {
-  id: number;
-  username: string;
-  role: string;
-  token: string;
-  tokenExpiry?: string;
-}
+const api = axios.create({
+  baseURL: '/api',
+  withCredentials: true
+});
 
-export const useAuth = () => {
-  const { 
-    user, 
-    token, 
-    setAuth, 
-    logout: logoutStore, 
-    isTokenExpired,
-    isTokenExpiringSoon,
-    getValidToken 
-  } = useAuthStore();
+export const useAuth = create<AuthState>((set) => ({
+  isAuthenticated: false,
+  user: null,
+  token: localStorage.getItem('token'),
+  loading: false,
+  error: null,
 
-  // Login function (atualizada para JWT)
-  const login = useCallback(async (credentials: LoginCredentials): Promise<User> => {
+  setLoading: (loading: boolean) => set({ loading }),
+
+  login: async (username: string, password: string) => {
     try {
-      const response = await apiService.login(credentials);
-      const data: LoginResponse = response.data;
+      const { data } = await api.post('/auth/login', { username, password });
       
-      // Salvar no store Zustand
-      const userObj: User = {
-        id: data.id,
-        username: data.username,
-        role: data.role,
-        token: data.token // Manter compatibilidade
-      };
-      
-      setAuth(userObj, data.token, data.tokenExpiry);
-
-      console.log('✅ Login successful');
-      
-      return userObj;
+      if (data.token) {
+        localStorage.setItem('token', data.token);
+        set({ 
+          isAuthenticated: true, 
+          user: data.user,
+          token: data.token,
+          error: null 
+        });
+      }
     } catch (error: any) {
-      console.error('❌ Login error:', error);
-      
-      // Manter compatibilidade com mensagens de erro existentes
-      const message = error.response?.data?.message || error.message || 'Login failed';
-      throw new Error(message);
+      set({ 
+        error: error.response?.data?.error || 'Login failed',
+        isAuthenticated: false,
+        user: null 
+      });
+      throw error;
     }
-  }, [setAuth]);
+  },
 
-  // Logout function
-  const logout = useCallback(() => {
-    logoutStore();
-    console.log('✅ Logout completed');
-  }, [logoutStore]);
+  logout: () => {
+    localStorage.removeItem('token');
+    set({
+      isAuthenticated: false,
+      user: null,
+      token: null,
+      error: null
+    });
+  },
 
-  // Verificar se usuário está autenticado
-  const isAuthenticated = useCallback((): boolean => {
-    return !!(user && token && !isTokenExpired());
-  }, [user, token, isTokenExpired]);
+  checkAuth: async () => {
+    const token = localStorage.getItem('token');
+    
+    if (!token) {
+      set({ 
+        isAuthenticated: false,
+        user: null,
+        token: null,
+        error: null
+      });
+      return false;
+    }
 
-  // Obter token válido para uso manual
-  const getToken = useCallback(async (): Promise<string | null> => {
-    return await getValidToken();
-  }, [getValidToken]);
+    try {
+      const { data } = await api.get('/auth/verify', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
 
-  return {
-    user,
-    token,
-    login,
-    logout,
-    isAuthenticated,
-    getToken,
-    isTokenExpired: isTokenExpired(),
-    isTokenExpiringSoon: isTokenExpiringSoon()
-  };
-};
+      if (data.valid) {
+        set({ 
+          isAuthenticated: true,
+          user: data.user,
+          token,
+          error: null
+        });
+        return true;
+      }
+    } catch (error) {
+      localStorage.removeItem('token');
+      set({
+        isAuthenticated: false,
+        user: null,
+        token: null,
+        error: null
+      });
+    }
+    
+    return false;
+  }
+}));
+
+export const getToken = () => localStorage.getItem('token');

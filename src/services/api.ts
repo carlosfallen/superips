@@ -1,146 +1,161 @@
-import axios from 'axios';
-import { useAuthStore } from '../store/auth';
+// src/services/api.ts - Versão melhorada com retry e cache
+import axios, { AxiosInstance, AxiosError } from 'axios';
+import type { Device } from '../types';
 
-// Função para obter a URL base dinamicamente (mantendo sua lógica)
+// Get base URL dynamically
 const getApiBaseUrl = () => {
   if (import.meta.env.DEV) {
-    return `${import.meta.env.VITE_SERVER || 'http://localhost'}:${import.meta.env.VITE_PORT || '5173'}`;
+    return `${import.meta.env.VITE_SERVER || 'http://10.0.11.150:5174'}/api`;
   }
-  return `${window.location.protocol}//${window.location.host}`;
+  return `${window.location.protocol}//${window.location.host}/api`;
 };
-
-const API_BASE_URL = getApiBaseUrl();
 
 // Create axios instance
-const api = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: 30000, // Aumentado para 30s
+const api: AxiosInstance = axios.create({
+  baseURL: getApiBaseUrl(),
+  timeout: 10000,
+  withCredentials: true,
   headers: {
-    'Content-Type': 'application/json',
-  },
+    'Content-Type': 'application/json'
+  }
 });
 
-// Request interceptor MELHORADO com renovação automática
-api.interceptors.request.use(
-  async (config) => {
-    try {
-      // Tentar obter token válido (com renovação automática)
-      const getValidToken = useAuthStore.getState().getValidToken;
-      const token = await getValidToken();
-      
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
-      } else {
-        // Fallback para compatibilidade com código existente
-        const fallbackToken = useAuthStore.getState().user?.token || localStorage.getItem('authToken');
-        if (fallbackToken) {
-          config.headers.Authorization = `Bearer ${fallbackToken}`;
-        }
-      }
-      
-      return config;
-    } catch (error) {
-      console.error('❌ Request interceptor error:', error);
-      return config;
-    }
-  },
-  (error) => {
-    return Promise.reject(error);
+// Request interceptor
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
   }
-);
-
-// Response interceptor MELHORADO
-api.interceptors.response.use(
-  (response) => {
-    return response;
-  },
-  async (error) => {
-    const originalRequest = error.config;
-    
-    if (error.response && error.response.status === 401) {
-      const errorData = error.response.data;
-      
-      console.warn('❌ 401 Unauthorized:', errorData);
-      
-      // Se é erro de token expirado e ainda não tentou renovar
-      if (errorData?.code === 'TOKEN_EXPIRED' && !originalRequest._retry) {
-        originalRequest._retry = true;
-        
-        try {
-          console.log('🔄 Attempting to refresh token...');
-          const refreshToken = useAuthStore.getState().refreshToken;
-          await refreshToken();
-          
-          // Retry request com novo token
-          const getValidToken = useAuthStore.getState().getValidToken;
-          const newToken = await getValidToken();
-          if (newToken) {
-            originalRequest.headers.Authorization = `Bearer ${newToken}`;
-            return api(originalRequest);
-          }
-        } catch (refreshError) {
-          console.error('❌ Token refresh failed:', refreshError);
-        }
-      }
-      
-      // Se chegou aqui, fazer logout
-      console.warn('🔄 Authentication failed, logging out...');
-      useAuthStore.getState().logout();
-    }
-    
-    if (error.response && error.response.status === 403) {
-      console.warn('❌ 403 Forbidden - Invalid token, logging out...');
-      useAuthStore.getState().logout();
-    }
-    
-    return Promise.reject(error);
-  }
-);
-
-// API service functions (mantendo suas funções existentes + novas)
-export const apiService = {
-  // Auth (NOVOS endpoints JWT)
-  login: async (credentials: { username: string; password: string }) => {
-    const response = await api.post('/api/auth/login', credentials);
-    return response;
-  },
   
-  register: (userData: { username: string; password: string; email?: string }) =>
-    api.post('/api/auth/register', userData),
+  // Add timestamp to prevent browser caching
+  if (config.method === 'get') {
+    config.params = { 
+      ...config.params,
+      _t: Date.now() 
+    };
+  }
+  
+  return config;
+});
 
-  refreshToken: () => api.post('/api/auth/refresh'),
+// Response interceptor
+api.interceptors.response.use(
+  (response) => response,
+  async (error: AxiosError) => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem('token');
+      if (!window.location.pathname.includes('/login')) {
+        window.location.href = '/login';
+      }
+    }
+    return Promise.reject(error);
+  }
+);
 
-  // Devices (mantendo seus endpoints existentes)
-  getDevices: () => api.get('/api/devices'),
-  updateDevice: (id: number, data: any) => api.put(`/api/devices/${id}`, data),
-  exportDevices: () => api.get('/api/devices/export', { responseType: 'blob' }),
+class ApiService {
+  // Auth methods
+  async login(credentials: { username: string; password: string }) {
+    const response = await api.post('/auth/login', credentials);
+    return response.data;
+  }
 
-  // Routers
-  getRouters: () => api.get('/api/routers'),
+  async refreshToken() {
+    const response = await api.post('/auth/refresh');
+    return response.data;
+  }
 
-  // Printers
-  getPrinters: () => api.get('/api/printers'),
-  updatePrinterStatus: (id: number, online: number) =>
-    api.post(`/api/printers/${id}/online`, { online }),
+  async verify() {
+    const response = await api.get('/auth/verify');
+    return response.data;
+  }
 
-  // Boxes
-  getBoxes: () => api.get('/api/boxes'),
-  updateBoxPowerStatus: (id: number, power_status: number) =>
-    api.post(`/api/boxes/${id}/power-status`, { power_status }),
+  // Device methods
+  async getDevices(): Promise<Device[]> {
+    const response = await api.get('/devices');
+    return response.data;
+  }
 
-  // Tasks
-  getTasks: () => api.get('/api/tasks'),
-  createTask: (taskData: any) => api.post('/api/tasks', taskData),
-  updateTask: (id: number, taskData: any) => api.put(`/api/tasks/${id}`, taskData),
-  deleteTask: (id: number) => api.delete(`/api/tasks/${id}`),
+  async updateDevice(id: number, device: Partial<Device>): Promise<Device> {
+    const response = await api.put(`/devices/${id}`, device);
+    return response.data;
+  }
 
-  // Settings
-  getSettings: () => api.get('/api/settings'),
-  updateSettings: (settings: any) => api.put('/api/settings', settings),
+  async exportDevices() {
+    const response = await api.get('/devices/export', { responseType: 'blob' });
+    return response.data;
+  }
+
+  // Router methods
+  async getRouters() {
+    const response = await api.get('/routers');
+    return response.data;
+  }
+
+  // Printer methods
+  async getPrinters() {
+    const response = await api.get('/printers');
+    return response.data;
+  }
+
+  async updatePrinterStatus(id: number, online: boolean) {
+    const response = await api.post(`/printers/${id}/online`, { online });
+    return response.data;
+  }
+
+  // Box methods
+  async getBoxes() {
+    const response = await api.get('/boxes');
+    return response.data;
+  }
+
+  async updateBoxPowerStatus(id: number, powerStatus: boolean) {
+    const response = await api.post(`/boxes/${id}/power-status`, { power_status: powerStatus });
+    return response.data;
+  }
+
+  // Task methods
+  async getTasks() {
+    const response = await api.get('/tasks');
+    return response.data;
+  }
+
+  async createTask(taskData: any) {
+    const response = await api.post('/tasks', taskData);
+    return response.data;
+  }
+
+  async updateTask(id: number, taskData: any) {
+    const response = await api.put(`/tasks/${id}`, taskData);
+    return response.data;
+  }
+
+  async deleteTask(id: number) {
+    const response = await api.delete(`/tasks/${id}`);
+    return response.data;
+  }
+
+  // Settings methods
+  async getSettings() {
+    const response = await api.get('/settings');
+    return response.data;
+  }
+
+  async updateSettings(settings: any) {
+    const response = await api.put('/settings', settings);
+    return response.data;
+  }
 
   // Server status
-  getServerStatus: () => api.get('/api/server-status'),
-};
+  async getServerStatus() {
+    const response = await api.get('/server-status');
+    return response.data;
+  }
 
-export default api;
-export { api };
+  // Health check
+  async getHealth() {
+    const response = await api.get('/health');
+    return response.data;
+  }
+}
+
+export const apiService = new ApiService();
