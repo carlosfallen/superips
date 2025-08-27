@@ -1,15 +1,25 @@
-version: "3.7"
+version: '3.8'
+
 services:
   app:
     build: .
-    restart: unless-stopped
+    container_name: superips_app
+    environment:
+      NODE_ENV: production
+      DB_HOST: 10.0.11.150
+      DB_PORT: 5432
+      DB_USER: superips_user
+      DB_PASSWORD: 359628
+      DB_NAME: superips_db
+      JWT_SECRET: TI
+      JWT_REFRESH_SECRET: TI_REFRESH
     ports:
       - "5173:5173"
-    volumes:
-      - ./server:/app/data
     networks:
-      - umbrel_main_network
+      - superips_network
+    restart: unless-stopped
+    command: sh -c "./wait-for-postgres.sh 10.0.11.150 node server/index.js"
 
 networks:
-  umbrel_main_network:
-    external: true
+  superips_network:
+    driver: bridge

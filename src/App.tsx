@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from './hooks/useAuth';
 import { useSocket } from './hooks/useSocket';
 import { useNavigationStore } from './store/navigation';
@@ -20,37 +20,46 @@ import Layout from './components/Layout';
 
 function App() {
   const { connect, disconnect } = useSocket();
-  const { checkAuth } = useAuth();
+  const { checkAuth, isAuthenticated } = useAuth();
   const currentPage = useNavigationStore((state) => state.currentPage);
   const [initializing, setInitializing] = useState(true);
 
-  const handleLoginSuccess = () => {
+  const handleLoginSuccess = useCallback(() => {
     useNavigationStore.getState().setPage('dashboard');
-  };
+  }, []);
 
-  // Inicialização do Auth
   useEffect(() => {
+    let mounted = true;
+
     const initializeAuth = async () => {
       try {
-        await checkAuth();
-        connect(); // conecta socket na inicialização
+        const isValid = await checkAuth();
+        
+        if (!mounted) return;
+        
+        if (isValid) {
+          connect();
+        }
       } catch (error) {
         console.error('❌ Auth initialization failed:', error);
       } finally {
-        setInitializing(false);
+        if (mounted) {
+          setInitializing(false);
+        }
       }
     };
+
     initializeAuth();
 
     return () => {
-      disconnect(); // use disconnect instead of disconnectSocket
+      mounted = false;
+      disconnect();
     };
-  }, [checkAuth, connect, disconnect]);
+  }, []);
 
   if (initializing) return <LoadingSpinner />;
 
-  // Renderização das páginas
-  if (!currentPage || currentPage === 'login') {
+  if (!isAuthenticated || !currentPage || currentPage === 'login') {
     return <Login onLoginSuccess={handleLoginSuccess} />;
   }
 

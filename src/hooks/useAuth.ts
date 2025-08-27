@@ -18,7 +18,9 @@ const api = axios.create({
   withCredentials: true
 });
 
-export const useAuth = create<AuthState>((set) => ({
+let isCheckingAuth = false;
+
+export const useAuth = create<AuthState>((set, get) => ({
   isAuthenticated: false,
   user: null,
   token: localStorage.getItem('token'),
@@ -61,19 +63,25 @@ export const useAuth = create<AuthState>((set) => ({
   },
 
   checkAuth: async () => {
-    const token = localStorage.getItem('token');
-    
-    if (!token) {
-      set({ 
-        isAuthenticated: false,
-        user: null,
-        token: null,
-        error: null
-      });
-      return false;
+    if (isCheckingAuth) {
+      return get().isAuthenticated;
     }
 
+    isCheckingAuth = true;
+    
     try {
+      const token = localStorage.getItem('token');
+      
+      if (!token) {
+        set({ 
+          isAuthenticated: false,
+          user: null,
+          token: null,
+          error: null
+        });
+        return false;
+      }
+
       const { data } = await api.get('/auth/verify', {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -86,6 +94,15 @@ export const useAuth = create<AuthState>((set) => ({
           error: null
         });
         return true;
+      } else {
+        localStorage.removeItem('token');
+        set({
+          isAuthenticated: false,
+          user: null,
+          token: null,
+          error: null
+        });
+        return false;
       }
     } catch (error) {
       localStorage.removeItem('token');
@@ -95,9 +112,10 @@ export const useAuth = create<AuthState>((set) => ({
         token: null,
         error: null
       });
+      return false;
+    } finally {
+      isCheckingAuth = false;
     }
-    
-    return false;
   }
 }));
 

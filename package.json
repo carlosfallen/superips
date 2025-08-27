@@ -5,12 +5,14 @@
   "private": true,
   "version": "7.2.0",
   "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "server": "nodemon server/index.js",
-    "start": "run-s build serve"
-  },
+"scripts": {
+  "dev": "concurrently \"npm:dev:frontend\" \"npm:dev:backend\"",
+  "dev:frontend": "vite",
+  "dev:backend": "nodemon server/index.js",
+  "build": "vite build",
+  "server": "nodemon server/index.js",
+  "start": "run-s build serve"
+},
   "dependencies": {
     "@capacitor/android": "^7.2.0",
     "@capacitor/cli": "^7.2.0",
