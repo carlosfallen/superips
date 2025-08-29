@@ -1,4 +1,4 @@
-export type DeviceType = 'Roteador' | 'Impressora' | 'Caixa';
+export type DeviceType = 'Roteador' | 'Impressora' | 'Caixa'| 'Balança'| 'Computador';
 export type DeviceStatus = 1 | 0;
 
 export interface Device {

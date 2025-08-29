@@ -10,11 +10,9 @@ import {
   User,
   QrCode
 } from 'lucide-react';
-import { useAuthStore } from '../store/auth';
 import { QRCode } from 'react-qrcode-logo';
 
 export default function Routers() {
-  const { user } = useAuthStore();
   const [isClosing, setIsClosing] = useState(false);
   const [routers, setRouters] = useState<Router[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -25,13 +23,8 @@ export default function Routers() {
   useEffect(() => {
     const fetchRouters = async () => {
       try {
-        if (!user || !user.token) {
-          throw new Error('Authentication token is missing');
-        }
-
         const response = await fetch(`${import.meta.env.VITE_SERVER}:${import.meta.env.VITE_PORT}/api/routers`, {
           headers: {
-            Authorization: `Bearer ${user.token}`,
             'Content-Type': 'application/json',
           },
         });
@@ -51,7 +44,7 @@ export default function Routers() {
     };
 
     fetchRouters();
-  }, [user]);
+  }, []);
 
   const togglePasswordVisibility = (routerId: number, field: 'login' | 'wifi') => {
     setShowPassword((prev) => ({

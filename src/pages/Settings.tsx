@@ -36,7 +36,77 @@ export default function Settings() {
   const { isDarkMode, toggleDarkMode } = useTheme();
   const { toast } = useToast();
   const { user } = useAuthStore();
-  
+  // estado local para import/export devices
+const [devicesLoading, setDevicesLoading] = useState(false);
+
+const downloadDevices = async () => {
+  setDevicesLoading(true);
+  try {
+    const resp = await fetch(`${import.meta.env.VITE_SERVER}:${import.meta.env.VITE_PORT}/api/devices/export`, {
+      method: 'GET',
+      headers: { Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+    });
+    if (!resp.ok) throw new Error('Falha ao exportar dispositivos');
+
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.setAttribute('download', 'devices.xlsx');
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+
+    toast({ title: 'Sucesso', description: 'Exportação concluída' });
+  } catch (err) {
+    console.error('Erro export devices:', err);
+    toast({ title: 'Erro', description: 'Falha ao exportar dispositivos', variant: 'destructive' });
+  } finally {
+    setDevicesLoading(false);
+  }
+};
+
+const handleImportDevices = async (ev: React.ChangeEvent<HTMLInputElement>) => {
+  const file = ev.target.files?.[0];
+  if (!file) return;
+  setDevicesLoading(true);
+  try {
+    const fd = new FormData();
+    fd.append('file', file, file.name);
+
+    const resp = await fetch(`${import.meta.env.VITE_SERVER}:${import.meta.env.VITE_PORT}/api/devices/import`, {
+      method: 'POST',
+      body: fd
+    });
+
+    if (!resp.ok) {
+      const txt = await resp.text();
+      console.error('Import failed:', txt);
+      throw new Error('Falha na importação');
+    }
+
+    const json = await resp.json();
+    console.log('Import result:', json);
+
+    const summary = json.summary ?? json;
+    toast({
+      title: 'Importação concluída',
+      description: `Inseridos: ${summary.inserted || 0} • Atualizados: ${summary.updated || 0} • Pulados: ${summary.skipped || 0}`
+    });
+
+    // opcional: recarregar a lista de dispositivos (se tiver um store ou rota)
+    // await fetchDevices(); // adaptar conforme seu app
+  } catch (err) {
+    console.error('Erro ao importar devices:', err);
+    toast({ title: 'Erro', description: 'Falha ao importar dispositivos', variant: 'destructive' });
+  } finally {
+    // limpa input
+    (ev.target as HTMLInputElement).value = '';
+    setDevicesLoading(false);
+  }
+};
+
   const [notifications, setNotifications] = useState<NotificationSettings>({
     deviceStatus: true,
     printerStatus: true,
@@ -182,7 +252,7 @@ export default function Settings() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-6">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
@@ -507,6 +577,47 @@ export default function Settings() {
           </p>
         </CardContent>
       </Card>
+      {/* Devices Import/Export */}
+<Card>
+  <CardHeader>
+    <CardTitle className="flex items-center gap-2">
+      <Database className="h-5 w-5" />
+      Dispositivos (Export / Import)
+    </CardTitle>
+  </CardHeader>
+  <CardContent>
+    <div className="flex flex-col md:flex-row gap-4">
+      <Button variant="outline" onClick={downloadDevices} className="flex-1" disabled={devicesLoading}>
+        <Download className="h-4 w-4 mr-2" />
+        {devicesLoading ? 'Processando...' : 'Exportar Dispositivos (XLSX)'}
+      </Button>
+
+      <div className="flex-1">
+        <input
+          type="file"
+          accept=".xlsx,.xls,.json"
+          id="import-devices-file"
+          onChange={handleImportDevices}
+          className="hidden"
+        />
+        <Button
+          variant="outline"
+          onClick={() => document.getElementById('import-devices-file')?.click()}
+          className="w-full"
+          disabled={devicesLoading}
+        >
+          <Upload className="h-4 w-4 mr-2" />
+          {devicesLoading ? 'Processando...' : 'Importar Dispositivos'}
+        </Button>
+      </div>
+    </div>
+
+    <p className="text-sm text-gray-600 dark:text-gray-400 mt-4">
+      Exporte a planilha de dispositivos ou importe uma planilha (XLSX) / JSON para inserir/atualizar dispositivos.
+    </p>
+  </CardContent>
+</Card>
+
     </div>
   );
 }

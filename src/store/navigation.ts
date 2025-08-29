@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 
 export type Page =
-  | 'login'
   | 'dashboard'
   | 'devices'
   | 'printers'
@@ -17,6 +16,6 @@ interface NavigationState {
 }
 
 export const useNavigationStore = create<NavigationState>((set) => ({
-  currentPage: 'login',
+  currentPage: 'dashboard',
   setPage: (page) => set({ currentPage: page }),
 }));

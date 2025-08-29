@@ -5,10 +5,21 @@
     <link rel="icon" href="/logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Super IPS</title>
-    <script type="module" crossorigin src="/assets/index-Csum--26.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-DVrIczw5.css">
+    <script type="module" crossorigin src="/assets/index-CsIgzVGh.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-DjxvSQjV.css">
   <link rel="manifest" href="/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/registerSW.js"></script></head>
   <body>
     <div id="root"></div>
+    <script>
+  (function() {
+    try {
+      const theme = localStorage.getItem('theme');
+      if (theme === 'dark') document.documentElement.classList.add('dark');
+      else if (theme === 'light') document.documentElement.classList.remove('dark');
+      else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.classList.add('dark');
+    } catch(e) {}
+  })();
+</script>
+
   </body>
 </html>

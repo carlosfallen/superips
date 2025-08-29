@@ -1,69 +1,50 @@
 import { useEffect, useState } from 'react';
 import type { Printer } from '../types';
 import { Activity, Power, Printer as PrinterIcon, CheckCircle2, Clock, RefreshCcw } from 'lucide-react';
-import { useAuthStore } from '../store/auth';
 import { Switch } from '../components/ui/switch';
 
 export default function Printers() {
-  const { user } = useAuthStore();
   const [printers, setPrinters] = useState<Printer[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [updatingPrinters, setUpdatingPrinters] = useState<Set<number>>(new Set());
 
-  const fetchPrinters = async () => {
-    try {
-      if (!user?.token) {
-        throw new Error('Authentication token is missing');
-      }
-
-      const response = await fetch(`${import.meta.env.VITE_SERVER}:${import.meta.env.VITE_PORT}/api/printers`, {
-        headers: {
-          Authorization: `Bearer ${user.token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch printers');
-      }
-
-      const data: Printer[] = await response.json();
-      setPrinters(Array.isArray(data) ? data : []);
-    } catch (error) {
-      console.error('Fetch printers error:', error);
-      setError(error instanceof Error ? error.message : 'An unknown error occurred');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   useEffect(() => {
+    const fetchPrinters = async () => {
+      try {
+        const response = await fetch(`${import.meta.env.VITE_SERVER}:${import.meta.env.VITE_PORT}/api/printers`, {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch printers');
+        }
+
+        const data: Printer[] = await response.json();
+        const convertedData = data.map(printer => ({
+          ...printer,
+          online: Number(printer.online) as 0 | 1,
+          status: Number(printer.status) as 0 | 1
+        }));
+        setPrinters(Array.isArray(data) ? convertedData : []);
+      } catch (error) {
+        console.error('Fetch printers error:', error);
+        setError(error instanceof Error ? error.message : 'An unknown error occurred');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
     fetchPrinters();
-  }, [user]);
+    const interval = setInterval(fetchPrinters, 5000);
+    
+    return () => clearInterval(interval);
+  }, []);
 
-const handlePrinterOnlineChange = async (printerId: number, currentOnline: number) => {
-  if (updatingPrinters.has(printerId)) return;
-
-  setUpdatingPrinters(prev => new Set(prev).add(printerId));
-
-  try {
-    if (!user?.token) {
-      throw new Error('Authentication token is missing');
-    }
-
-    const response = await fetch(`${import.meta.env.VITE_SERVER}:${import.meta.env.VITE_PORT}/api/printers/${printerId}/online`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${user.token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ online: currentOnline }),
-    });
-
-    if (!response.ok) {
-      throw new Error('Failed to update printer status');
-    }
+  const handlePrinterOnlineChange = async (printerId: number, currentOnline: number) => {
+    if (updatingPrinters.has(printerId)) return;
 
     setPrinters(prevPrinters =>
       prevPrinters.map(printer =>
@@ -71,16 +52,35 @@ const handlePrinterOnlineChange = async (printerId: number, currentOnline: numbe
       )
     );
 
-  } catch (error) {
-    console.error('Error updating printer online status:', error);
-  } finally {
-    setUpdatingPrinters(prev => {
-      const next = new Set(prev);
-      next.delete(printerId);
-      return next;
-    });
-  }
-};
+    setUpdatingPrinters(prev => new Set(prev).add(printerId));
+
+    try {
+      const response = await fetch(`${import.meta.env.VITE_SERVER}:${import.meta.env.VITE_PORT}/api/printers/${printerId}/online`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ online: currentOnline }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to update printer status');
+      }
+    } catch (error) {
+      console.error('Error updating printer online status:', error);
+      setPrinters(prevPrinters =>
+        prevPrinters.map(printer =>
+          printer.id === printerId ? { ...printer, online: currentOnline === 1 ? 0 : 1 } : printer
+        )
+      );
+    } finally {
+      setUpdatingPrinters(prev => {
+        const next = new Set(prev);
+        next.delete(printerId);
+        return next;
+      });
+    }
+  };
 
   if (isLoading) {
     return (

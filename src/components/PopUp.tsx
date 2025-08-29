@@ -8,15 +8,10 @@ import {
   UserCircle,
   Info,
   AlertCircle,
-  Server,
-  CheckCircle,
-  Clock,
   Wifi,
   WifiOff
 } from 'lucide-react';
-import { Link } from 'react-router-dom';
 import axios from 'axios';
-import { useAuthStore } from '../store/auth';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { useToast } from '../hooks/use-toast';
@@ -115,13 +110,6 @@ const UserProfileMenu = ({
     const fetchUserData = async () => {
       setLoading(true);
       try {
-        const token = localStorage.getItem('authToken');
-        
-        if (!token) {
-          console.error('Token não encontrado');
-          return;
-        }
-        
         const tokenInfo = getUserInfoFromToken();
         
         if (tokenInfo) {
@@ -192,24 +180,28 @@ const UserProfileMenu = ({
           </div>
           
           <div className="p-2">
-            <Link
-              to="/settings"
+            <button
+              onClick={() => {
+                window.location.href = '/settings';
+                onToggle();
+              }}
               className="flex items-center w-full px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors"
-              onClick={() => onToggle()}
             >
               <Settings className="h-4 w-4 mr-3" />
               Configurações
-            </Link>
-            
-            <Link
-              to="/help"
+            </button>
+
+            <button
+              onClick={() => {
+                window.location.href = '/help';
+                onToggle();
+              }}
               className="flex items-center w-full px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors"
-              onClick={() => onToggle()}
             >
               <HelpCircle className="h-4 w-4 mr-3" />
               Ajuda
-            </Link>
-            
+            </button>
+
             <button
               onClick={() => {
                 logout();
@@ -235,7 +227,6 @@ const NotificationsPopover = ({
   isOpen: boolean;
   onToggle: () => void;
 }) => {
-  const { user } = useAuthStore();
   const { toast } = useToast();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -296,19 +287,20 @@ const NotificationsPopover = ({
   };
 
   useEffect(() => {
-    if (!user) return;
-
     const fetchData = async () => {
       setLoading(true);
       try {
-        const token = user.token ?? localStorage.getItem('authToken');
-        if (!token) throw new Error('Token ausente');
-
-        const headers = { Authorization: `Bearer ${token}` };
-        
         const [devicesRes, printersRes] = await Promise.all([
-          axios.get(`${API_BASE_URL}/api/devices`, { headers }),
-          axios.get(`${API_BASE_URL}/api/printers`, { headers })
+          axios.get(`${API_BASE_URL}/api/devices`, {
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          }),
+          axios.get(`${API_BASE_URL}/api/printers`, {
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          })
         ]);
 
         const currentDevices = devicesRes.data;
@@ -352,7 +344,7 @@ const NotificationsPopover = ({
     // Configurar polling a cada 30 segundos
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
-  }, [user, toast]);
+  }, [toast]);
 
   const unreadCount = notifications.filter(n => !n.read).length;
 

@@ -38,23 +38,29 @@ export const useTaskStore = create<TaskState>()(
       isLoading: false,
       error: null,
 
-      setTasks: (tasks) => set({ tasks, error: null }),
+setTasks: (tasks) => {
+  const sanitized = Array.isArray(tasks) ? tasks.filter(Boolean) : [];
+  set({ tasks: sanitized, error: null });
+},
 
-      addTask: (task) => {
-        set((state) => ({
-          tasks: [task, ...state.tasks],
-          error: null,
-        }));
-      },
+addTask: (task) => {
+  if (!task) return;
+  set((state) => ({
+    tasks: [task, ...state.tasks],
+    error: null,
+  }));
+},
 
-      updateTask: (updatedTask) => {
-        set((state) => ({
-          tasks: state.tasks.map(task =>
-            task.id === updatedTask.id ? updatedTask : task
-          ),
-          error: null,
-        }));
-      },
+updateTask: (updatedTask) => {
+  if (!updatedTask || !updatedTask.id) return;
+  set((state) => ({
+    tasks: state.tasks.map(task =>
+      task && task.id === updatedTask.id ? updatedTask : task
+    ),
+    error: null,
+  }));
+},
+
 
       removeTask: (id) => {
         set((state) => ({
@@ -67,22 +73,23 @@ export const useTaskStore = create<TaskState>()(
 
       setError: (error) => set({ error }),
 
-      getTasksByStatus: (status) => {
-        return get().tasks.filter(task => task.status === status);
-      },
+getTasksByStatus: (status) => {
+  return get().tasks.filter(task => task && task.status === status);
+},
 
-      getTasksByPriority: (priority) => {
-        return get().tasks.filter(task => task.priority === priority);
-      },
+getTasksByPriority: (priority) => {
+  return get().tasks.filter(task => task && task.priority === priority);
+},
 
-      getOverdueTasks: () => {
-        const today = new Date().toISOString().split('T')[0];
-        return get().tasks.filter(task => 
-          task.due_date && 
-          task.due_date < today && 
-          task.status !== 'completed'
-        );
-      },
+getOverdueTasks: () => {
+  const today = new Date().toISOString().split('T')[0];
+  return get().tasks.filter(task =>
+    task &&
+    task.due_date &&
+    task.due_date < today &&
+    task.status !== 'completed'
+  );
+},
     }),
     {
       name: 'tasks-storage',

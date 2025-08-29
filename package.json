@@ -5,14 +5,14 @@
   "private": true,
   "version": "7.2.0",
   "type": "module",
-"scripts": {
-  "dev": "concurrently \"npm:dev:frontend\" \"npm:dev:backend\"",
-  "dev:frontend": "vite",
-  "dev:backend": "nodemon server/index.js",
-  "build": "vite build",
-  "server": "nodemon server/index.js",
-  "start": "run-s build serve"
-},
+  "scripts": {
+    "dev": "concurrently \"npm:dev:frontend\" \"npm:dev:backend\"",
+    "dev:frontend": "vite",
+    "dev:backend": "nodemon server/index.js",
+    "build": "vite build",
+    "server": "nodemon server/index.js",
+    "start": "run-s build serve"
+  },
   "dependencies": {
     "@capacitor/android": "^7.2.0",
     "@capacitor/cli": "^7.2.0",
@@ -36,6 +36,7 @@
     "jsonwebtoken": "^9.0.2",
     "jwt-decode": "^4.0.0",
     "lucide-react": "^0.344.0",
+    "multer": "^2.0.2",
     "node-schedule": "^2.1.1",
     "openssl": "^2.0.0",
     "pg": "^8.16.3",

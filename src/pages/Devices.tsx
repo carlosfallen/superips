@@ -1,4 +1,3 @@
-// src/pages/Devices.tsx - Versão corrigida com useAuth hook
 import { useEffect, useState } from 'react';
 import { useDevicesStore } from '../store/devices';
 import { 
@@ -6,8 +5,6 @@ import {
   ArrowRight, ArrowLeft, Edit2, X, Save, Loader2 
 } from 'lucide-react';
 import type { Device } from '../types';
-import { useAuth } from '../hooks/useAuth'; // Usar o hook useAuth em vez de useAuthStore
-import { socketService } from '../services/socket';
 import { apiService } from '../services/api';
 
 interface EditModalProps {
@@ -171,7 +168,6 @@ const EditModal = ({ device, onClose, onSave }: EditModalProps) => {
 };
 
 export default function Devices() {
-  const { getToken } = useAuth(); // Usar useAuth em vez de useAuthStore
   const { devices, setDevices, updateDevice } = useDevicesStore();
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -183,8 +179,8 @@ export default function Devices() {
   });
   const [currentNetwork, setCurrentNetwork] = useState<'10.0' | '10.2' | '10.4'>('10.0');
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
+  const [expandedDeviceId, setExpandedDeviceId] = useState<number | null>(null);
 
-  // Filtrar dispositivos por faixa de rede
   const getDevicesByNetwork = (network: '10.0' | '10.2' | '10.4'): Device[] => {
     return devices.filter(device => device.ip.startsWith(network));
   };
@@ -192,31 +188,26 @@ export default function Devices() {
   useEffect(() => {
     const fetchDevices = async () => {
       try {
-        // Obter token válido através do hook useAuth
-        const token = await getToken();
-        if (!token) {
-          throw new Error('Authentication token is missing');
-        }
+        setIsLoading(true);
+        setError(null);
         
-        const response = await apiService.getDevices();
-        
-        // Para Axios, verificamos response.status em vez de response.ok
-        if (response.status < 200 || response.status >= 300) {
-          const errorData = response.data;
-          throw new Error(errorData?.message || 'Failed to fetch devices');
-        }
-
-        const data: Device[] = response.data;
-        setDevices(Array.isArray(data) ? data : []);
+        const data = await apiService.getDevices();
+        const convertedData = data.map(device => ({
+          ...device,
+          status: Number(device.status) as 0 | 1
+        }));
+        setDevices(Array.isArray(data) ? convertedData : []);
       } catch (error: any) {
-        let errorMessage = 'Failed to fetch devices';
+        let errorMessage = 'Erro ao carregar dispositivos';
+        
         if (error.code === 'ECONNREFUSED' || error.code === 'ERR_NETWORK') {
-          errorMessage = 'Network error - check server connection';
-        } else if (error.response?.data?.message) {
-          errorMessage = error.response.data.message;
+          errorMessage = 'Erro de rede - verifique se o servidor está rodando';
+        } else if (error.response?.data?.error) {
+          errorMessage = error.response.data.error;
         } else if (error.message) {
           errorMessage = error.message;
         }
+        
         setError(errorMessage);
         console.error('Error fetching devices:', error);
       } finally {
@@ -225,16 +216,9 @@ export default function Devices() {
     };
 
     fetchDevices();
-
-    // Conecta ao socket service centralizado
-    socketService.connect();
-
-    // Cleanup não é necessário aqui pois o socketService é gerenciado globalmente
-    // Os eventos já são tratados automaticamente no socketService
-  }, [setDevices, getToken]);
+  }, [setDevices]);
 
   useEffect(() => {
-    // Filtragem e ordenação
     let list = getDevicesByNetwork(currentNetwork);
 
     list = list.filter(device =>
@@ -273,32 +257,16 @@ export default function Devices() {
 
   const handleSaveDevice = async (updatedDevice: Device) => {
     try {
-      // Obter token válido através do hook useAuth
-      const token = await getToken();
-      if (!token) {
-        throw new Error('Authentication token is missing');
-      }
-      
-      const response = await apiService.updateDevice(updatedDevice.id, updatedDevice);
-      
-      // Para Axios, verificamos response.status em vez de response.ok
-      if (response.status < 200 || response.status >= 300) {
-        const errorData = response.data;
-        throw new Error(errorData?.message || 'Failed to update device');
-      }
-
-      const updatedData = response.data;
+      const updatedData = await apiService.updateDevice(updatedDevice.id, updatedDevice);
       updateDevice(updatedData);
-      
     } catch (error: any) {
       console.error('Error updating device:', error);
-      // Melhor tratamento de erro para Axios
-      if (error.response?.data?.message) {
-        throw new Error(error.response.data.message);
+      if (error.response?.data?.error) {
+        throw new Error(error.response.data.error);
       } else if (error.message) {
         throw new Error(error.message);
       } else {
-        throw new Error('Failed to update device');
+        throw new Error('Falha ao atualizar dispositivo');
       }
     }
   };
@@ -327,136 +295,6 @@ export default function Devices() {
     </span>
   );
 
-  const DesktopView = () => (
-    <div className="hidden md:block transition-opacity duration-300 ease-in-out">
-      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl dark:shadow-gray-500/30 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-            <thead className="bg-gray-50 dark:bg-gray-900">
-              <tr>
-                {['IP', 'Nome', 'Tipo', 'Usuário', 'Setor', 'Status', 'Ações'].map((header) => (
-                  <th
-                    key={header}
-                    onClick={() => header !== 'Ações' && handleSort(header.toLowerCase() as keyof Device)}
-                    className={`px-6 py-4 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider ${
-                      header !== 'Ações' ? 'cursor-pointer hover:text-gray-700 dark:hover:text-gray-300' : ''
-                    }`}
-                  >
-                    <div className="flex items-center space-x-1">
-                      <span>{header}</span>
-                      {header !== 'Ações' && sortConfig?.key === header.toLowerCase() && (
-                        sortConfig.direction === 'asc' ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />
-                      )}
-                    </div>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-              {filteredDevices.map((device) => (
-                <tr key={device.id} className="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors duration-150">
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">
-                    {device.ip}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">
-                    {device.name}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300 capitalize">
-                    {device.type}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300 capitalize">
-                    {device.user}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300 capitalize">
-                    {device.sector}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <StatusIndicator status={device.status} />
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <button
-                      onClick={() => setEditingDevice(device)}
-                      className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 focus:outline-none"
-                    >
-                      <span className="flex items-center">
-                        <Edit2 className="w-4 h-4 mr-1" />
-                        Editar
-                      </span>
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-
-  const MobileView = () => {
-    const [expandedDeviceId, setExpandedDeviceId] = useState<number | null>(null);
-
-    return (
-      <div className="md:hidden space-y-4 rounded-2xl transition-opacity duration-300 ease-in-out">
-        {filteredDevices.map((device) => (
-          <div
-            key={device.id}
-            className="bg-white dark:bg-gray-800 shadow-lg dark:shadow-gray-900/30 overflow-hidden border border-gray-200 dark:border-gray-700 rounded-2xl"
-          >
-            <div
-              className="p-4 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors duration-150"
-              onClick={() => setExpandedDeviceId(expandedDeviceId === device.id ? null : device.id)}
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <StatusIndicator status={device.status} />
-                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">{device.name}</h3>
-                </div>
-                <ChevronDown 
-                  className={`w-5 h-5 text-gray-400 dark:text-gray-500 transition-transform duration-200 
-                    ${expandedDeviceId === device.id ? 'rotate-180' : ''}`}
-                />
-              </div>
-              <div className="mt-2 text-sm text-gray-600 dark:text-gray-300">
-                <p>IP: {device.ip}</p>
-              </div>
-            </div>
-
-            {expandedDeviceId === device.id && (
-              <div className="p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
-                <div className="space-y-2 text-sm">
-                  <p className="flex justify-between">
-                    <span className="text-gray-500 dark:text-gray-400">Tipo:</span>
-                    <span className="text-gray-900 dark:text-gray-100 capitalize">{device.type}</span>
-                  </p>
-                  <p className="flex justify-between">
-                    <span className="text-gray-500 dark:text-gray-400">Usuário:</span>
-                    <span className="text-gray-900 dark:text-gray-100">{device.user}</span>
-                  </p>
-                  <p className="flex justify-between">
-                    <span className="text-gray-500 dark:text-gray-400">Setor:</span>
-                    <span className="text-gray-900 dark:text-gray-100">{device.sector}</span>
-                  </p>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditingDevice(device);
-                    }}
-                    className="mt-3 w-full flex items-center justify-center px-4 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 border border-transparent rounded-md hover:bg-indigo-100 dark:bg-indigo-900 dark:text-indigo-300 dark:hover:bg-indigo-800"
-                  >
-                    <Edit2 className="w-4 h-4 mr-2" />
-                    Editar Dispositivo
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    );
-  };
-
-  // Loading state
   if (isLoading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -465,7 +303,6 @@ export default function Devices() {
     );
   }
 
-  // Error state
   if (error) {
     return (
       <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-2xl p-4 text-center">
@@ -478,15 +315,14 @@ export default function Devices() {
   }
 
   return (
-    <div className="space-y-6 p-4 md:p-6 lg:p-8">
-      {/* Header */}
+    <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between">
         <h1 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-gray-100">
           Dispositivos
         </h1>
         <div className="mt-4 md:mt-0 flex items-center space-x-2">
           <span className="text-sm text-gray-500 dark:text-gray-400">
-            Rede: {currentNetwork}.x
+            Subrede: {currentNetwork}.x
           </span>
           <div className="flex items-center space-x-1">
             <button
@@ -505,7 +341,6 @@ export default function Devices() {
         </div>
       </div>
 
-      {/* Search Bar */}
       <div className="relative">
         <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
           <Search className="h-5 w-5 text-gray-400" />
@@ -519,41 +354,6 @@ export default function Devices() {
         />
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg dark:shadow-gray-500/30 p-4">
-          <div className="text-center">
-            <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-              {filteredDevices.length}
-            </div>
-            <div className="text-sm text-gray-500 dark:text-gray-400">
-              Total de dispositivos
-            </div>
-          </div>
-        </div>
-        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg dark:shadow-gray-500/30 p-4">
-          <div className="text-center">
-            <div className="text-2xl font-bold text-green-600 dark:text-green-400">
-              {filteredDevices.filter(d => d.status === 1).length}
-            </div>
-            <div className="text-sm text-gray-500 dark:text-gray-400">
-              Online
-            </div>
-          </div>
-        </div>
-        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg dark:shadow-gray-500/30 p-4">
-          <div className="text-center">
-            <div className="text-2xl font-bold text-red-600 dark:text-red-400">
-              {filteredDevices.filter(d => d.status === 0).length}
-            </div>
-            <div className="text-sm text-gray-500 dark:text-gray-400">
-              Offline
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Device List */}
       {filteredDevices.length === 0 ? (
         <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg dark:shadow-gray-500/30 p-8 text-center">
           <div className="text-gray-500 dark:text-gray-400">
@@ -563,13 +363,130 @@ export default function Devices() {
           </div>
         </div>
       ) : (
-        <>
-          <DesktopView />
-          <MobileView />
-        </>
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl dark:shadow-gray-500/30 overflow-hidden">
+          <div className="hidden lg:block">
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                <thead className="bg-gray-50 dark:bg-gray-900">
+                  <tr>
+                    {['IP', 'Nome', 'Tipo', 'Usuário', 'Setor', 'Status', 'Ações'].map((header) => (
+                      <th
+                        key={header}
+                        onClick={() => header !== 'Ações' && handleSort(header.toLowerCase() as keyof Device)}
+                        className={`px-6 py-4 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider ${
+                          header !== 'Ações' ? 'cursor-pointer hover:text-gray-700 dark:hover:text-gray-300' : ''
+                        }`}
+                      >
+                        <div className="flex items-center space-x-1">
+                          <span>{header}</span>
+                          {header !== 'Ações' && sortConfig?.key === header.toLowerCase() && (
+                            sortConfig.direction === 'asc' ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />
+                          )}
+                        </div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                  {filteredDevices.map((device) => (
+                    <tr key={device.id} className="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors duration-150">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">
+                        {device.ip}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">
+                        {device.name}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300 capitalize">
+                        {device.type}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300 capitalize">
+                        {device.user}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300 capitalize">
+                        {device.sector}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <StatusIndicator status={device.status} />
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <button
+                          onClick={() => setEditingDevice(device)}
+                          className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 focus:outline-none"
+                        >
+                          <span className="flex items-center">
+                            <Edit2 className="w-4 h-4 mr-1" />
+                            Editar
+                          </span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="lg:hidden space-y-4 p-4">
+            {filteredDevices.map((device) => (
+              <div
+                key={device.id}
+                className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl overflow-hidden"
+              >
+                <div
+                  className="p-4 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors duration-150"
+                  onClick={() => setExpandedDeviceId(expandedDeviceId === device.id ? null : device.id)}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <StatusIndicator status={device.status} />
+                      <div>
+                        <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">{device.name}</h3>
+                        <p className="text-sm text-gray-600 dark:text-gray-300">IP: {device.ip}</p>
+                      </div>
+                    </div>
+                    <ChevronDown 
+                      className={`w-5 h-5 text-gray-400 dark:text-gray-500 transition-transform duration-200 
+                        ${expandedDeviceId === device.id ? 'rotate-180' : ''}`}
+                    />
+                  </div>
+                </div>
+ 
+                {expandedDeviceId === device.id && (
+                  <div className="p-4 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+                    <div className="space-y-3 text-sm">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <span className="text-gray-500 dark:text-gray-400 block text-xs uppercase tracking-wide mb-1">Tipo</span>
+                          <span className="text-gray-900 dark:text-gray-100 capitalize">{device.type}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-500 dark:text-gray-400 block text-xs uppercase tracking-wide mb-1">Usuário</span>
+                          <span className="text-gray-900 dark:text-gray-100">{device.user}</span>
+                        </div>
+                      </div>
+                      <div>
+                        <span className="text-gray-500 dark:text-gray-400 block text-xs uppercase tracking-wide mb-1">Setor</span>
+                        <span className="text-gray-900 dark:text-gray-100">{device.sector}</span>
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingDevice(device);
+                        }}
+                        className="mt-3 w-full flex items-center justify-center px-4 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 border border-transparent rounded-2xl hover:bg-indigo-100 dark:bg-indigo-900 dark:text-indigo-300 dark:hover:bg-indigo-800"
+                      >
+                        <Edit2 className="w-4 h-4 mr-2" />
+                        Editar Dispositivo
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
-      {/* Edit Modal */}
       {editingDevice && (
         <EditModal
           device={editingDevice}

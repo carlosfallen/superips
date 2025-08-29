@@ -11,11 +11,11 @@ import { useToast } from '../hooks/use-toast';
 import { useTaskStore, Task } from '../store/tasks';
 import { apiService } from '../services/api';
 import LoadingSpinner from '../components/LoadingSpinner';
-
+ 
 export default function Tasks() {
   const { toast } = useToast();
   const {
-    tasks,
+    tasks = [],
     isLoading,
     error,
     setTasks,
@@ -43,15 +43,15 @@ export default function Tasks() {
     assigned_to: ''
   });
 
-  // Fetch tasks from API
   const fetchTasks = async () => {
     try {
       setLoading(true);
-      const response = await apiService.getTasks();
-      setTasks(response.data);
+      const data = await apiService.getTasks();
+      setTasks(data || []);
     } catch (error) {
       console.error('Error fetching tasks:', error);
       setError('Failed to fetch tasks');
+      setTasks([]);
       toast({
         title: "Erro",
         description: "Falha ao carregar tarefas",
@@ -77,8 +77,8 @@ export default function Tasks() {
     }
 
     try {
-      const response = await apiService.createTask(newTask);
-      addTask(response.data);
+      const created = await apiService.createTask(newTask);
+      if (created) addTask(created);
       
       setNewTask({
         title: '',
@@ -106,12 +106,12 @@ export default function Tasks() {
 
   const handleUpdateTask = async (taskId: number, updates: Partial<Task>) => {
     try {
-      const taskToUpdate = tasks.find(t => t.id === taskId);
+      const taskToUpdate = (tasks || []).find(t => t && t.id === taskId);
       if (!taskToUpdate) return;
 
       const updatedTaskData = { ...taskToUpdate, ...updates };
-      const response = await apiService.updateTask(taskId, updatedTaskData);
-      updateTask(response.data);
+      const updated = await apiService.updateTask(taskId, updatedTaskData);
+      if (updated) updateTask(updated);
       
       toast({
         title: "Sucesso",
@@ -147,7 +147,7 @@ export default function Tasks() {
   };
 
   const handleToggleStatus = (taskId: number) => {
-    const task = tasks.find(t => t.id === taskId);
+    const task = (tasks || []).find(t => t && t.id === taskId);
     if (!task) return;
 
     let newStatus: Task['status'];
@@ -158,9 +158,11 @@ export default function Tasks() {
     handleUpdateTask(taskId, { status: newStatus });
   };
 
-  const filteredTasks = tasks.filter(task => {
+  const filteredTasks = (tasks || []).filter(task => {
+    if (!task || !task.title) return false;
+    
     const matchesSearch = task.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         task.description.toLowerCase().includes(searchTerm.toLowerCase());
+                         (task.description || '').toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = filterStatus === 'all' || task.status === filterStatus;
     const matchesPriority = filterPriority === 'all' || task.priority === filterPriority;
     
@@ -200,7 +202,6 @@ export default function Tasks() {
     }
   };
 
-  // Statistics
   const pendingTasks = getTasksByStatus('pending');
   const inProgressTasks = getTasksByStatus('in-progress');
   const completedTasks = getTasksByStatus('completed');
@@ -216,7 +217,6 @@ export default function Tasks() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
@@ -236,7 +236,6 @@ export default function Tasks() {
         </Button>
       </div>
 
-      {/* Statistics Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4">
@@ -295,7 +294,6 @@ export default function Tasks() {
         </Card>
       </div>
 
-      {/* Filters */}
       <Card>
         <CardContent className="p-6">
           <div className="flex flex-col md:flex-row gap-4">
@@ -338,81 +336,82 @@ export default function Tasks() {
         </CardContent>
       </Card>
 
-      {/* Tasks Grid */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {filteredTasks.map((task) => (
-          <Card key={task.id} className="group hover:shadow-xl transition-all duration-300">
-            <CardHeader className="pb-3">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-2">
-                  <Checkbox
-                    checked={task.status === 'completed'}
-                    onCheckedChange={() => handleToggleStatus(task.id)}
-                  />
-                  <CardTitle className={`text-lg ${task.status === 'completed' ? 'line-through text-gray-500' : ''}`}>
-                    {task.title}
-                  </CardTitle>
+          task && task.id ? (
+            <Card key={task.id} className="group hover:shadow-xl transition-all duration-300">
+              <CardHeader className="pb-3">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      checked={task.status === 'completed'}
+                      onCheckedChange={() => handleToggleStatus(task.id)}
+                    />
+                    <CardTitle className={`text-lg ${task.status === 'completed' ? 'line-through text-gray-500' : ''}`}>
+                      {task.title || 'Título não informado'}
+                    </CardTitle>
+                  </div>
+                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setEditingTask(task)}
+                    >
+                      <Edit3 className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleDeleteTask(task.id)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setEditingTask(task)}
-                  >
-                    <Edit3 className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleDeleteTask(task.id)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                
+                <div className="flex gap-2 flex-wrap">
+                  <Badge variant={getPriorityColor(task.priority)}>
+                    {task.priority === 'high' ? 'Alta' : task.priority === 'medium' ? 'Média' : 'Baixa'}
+                  </Badge>
+                  <Badge variant={getStatusColor(task.status)}>
+                    {getStatusIcon(task.status)}
+                    <span className="ml-1">
+                      {task.status === 'pending' ? 'Pendente' : 
+                       task.status === 'in-progress' ? 'Em Progresso' : 'Concluída'}
+                    </span>
+                  </Badge>
                 </div>
-              </div>
+              </CardHeader>
               
-              <div className="flex gap-2 flex-wrap">
-                <Badge variant={getPriorityColor(task.priority)}>
-                  {task.priority === 'high' ? 'Alta' : task.priority === 'medium' ? 'Média' : 'Baixa'}
-                </Badge>
-                <Badge variant={getStatusColor(task.status)}>
-                  {getStatusIcon(task.status)}
-                  <span className="ml-1">
-                    {task.status === 'pending' ? 'Pendente' : 
-                     task.status === 'in-progress' ? 'Em Progresso' : 'Concluída'}
-                  </span>
-                </Badge>
-              </div>
-            </CardHeader>
-            
-            <CardContent>
-              <p className="text-gray-600 dark:text-gray-400 text-sm mb-4">
-                {task.description}
-              </p>
-              
-              <div className="space-y-2 text-xs text-gray-500 dark:text-gray-400">
-                {task.category && (
-                  <div className="flex items-center gap-2">
-                    <Filter className="h-3 w-3" />
-                    <span>{task.category}</span>
-                  </div>
-                )}
+              <CardContent>
+                <p className="text-gray-600 dark:text-gray-400 text-sm mb-4">
+                  {task.description || 'Sem descrição'}
+                </p>
                 
-                {task.due_date && (
-                  <div className="flex items-center gap-2">
-                    <Calendar className="h-3 w-3" />
-                    <span>Prazo: {new Date(task.due_date).toLocaleDateString('pt-BR')}</span>
-                  </div>
-                )}
-                
-                {task.assigned_to && (
-                  <div className="flex items-center gap-2">
-                    <span>Responsável: {task.assigned_to}</span>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
+                <div className="space-y-2 text-xs text-gray-500 dark:text-gray-400">
+                  {task.category && (
+                    <div className="flex items-center gap-2">
+                      <Filter className="h-3 w-3" />
+                      <span>{task.category}</span>
+                    </div>
+                  )}
+                  
+                  {task.due_date && (
+                    <div className="flex items-center gap-2">
+                      <Calendar className="h-3 w-3" />
+                      <span>Prazo: {new Date(task.due_date).toLocaleDateString('pt-BR')}</span>
+                    </div>
+                  )}
+                  
+                  {task.assigned_to && (
+                    <div className="flex items-center gap-2">
+                      <span>Responsável: {task.assigned_to}</span>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          ) : null
         ))}
       </div>
 
@@ -432,7 +431,6 @@ export default function Tasks() {
         </Card>
       )}
 
-      {/* Create Task Modal */}
       {isCreateModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <Card className="w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto">
